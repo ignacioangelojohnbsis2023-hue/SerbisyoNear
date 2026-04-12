@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+backend/.venv/
+venv/
+
+# env files
+.env
+backend/.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Vite build
+dist/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
