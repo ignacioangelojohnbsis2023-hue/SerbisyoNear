@@ -15,6 +15,16 @@ function validatePassword(password) {
   return "";
 }
 
+// Real-time input validation: Allow only letters, spaces, hyphens, and apostrophes for names
+function filterNameInput(value) {
+  return value.replace(/[0-9]/g, "");
+}
+
+// Real-time input validation: Allow only digits for phone numbers
+function filterPhoneInput(value) {
+  return value.replace(/[^0-9]/g, "");
+}
+
 const PSGC = "https://psgc.cloud/api";
 async function fetchRegions() {
   const res = await fetch(`${PSGC}/regions`);
@@ -415,15 +425,15 @@ export default function SignUp() {
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="First Name *">
-              <input className={inputCls} placeholder="Juan" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+              <input className={inputCls} placeholder="Juan" value={firstName} onChange={(e) => setFirstName(filterNameInput(e.target.value))} />
             </Field>
             <Field label="Last Name *">
-              <input className={inputCls} placeholder="Dela Cruz" value={lastName} onChange={(e) => setLastName(e.target.value)} />
+              <input className={inputCls} placeholder="Dela Cruz" value={lastName} onChange={(e) => setLastName(filterNameInput(e.target.value))} />
             </Field>
           </div>
 
           <Field label="Middle Name (optional)">
-            <input className={inputCls} placeholder="Santos" value={middleName} onChange={(e) => setMiddleName(e.target.value)} />
+            <input className={inputCls} placeholder="Santos" value={middleName} onChange={(e) => setMiddleName(filterNameInput(e.target.value))} />
           </Field>
 
           <Field label="Email *">
@@ -432,7 +442,7 @@ export default function SignUp() {
 
           {isProvider && (
             <Field label="Phone Number *">
-              <input className={inputCls} type="tel" placeholder="09XXXXXXXXX" value={phone} maxLength={11} onChange={(e) => setPhone(e.target.value)} />
+              <input className={inputCls} type="tel" placeholder="09XXXXXXXXX" value={phone} maxLength={11} onChange={(e) => setPhone(filterPhoneInput(e.target.value))} />
             </Field>
           )}
 
