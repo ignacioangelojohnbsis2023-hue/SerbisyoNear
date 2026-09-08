@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import { API_BASE_URL } from "../lib/api";
 
 const TYPE_CONFIG = {
@@ -19,7 +20,8 @@ function timeAgo(dateStr) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-export default function NotificationBell({ userId }) {
+export default function NotificationBell({ userId, light = false }) {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -28,6 +30,69 @@ export default function NotificationBell({ userId }) {
   const panelRef = useRef(null);
   const bellRef = useRef(null);
   const intervalRef = useRef(null);
+
+  const currentUser = (() => {
+    try {
+      const raw = localStorage.getItem("user");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  const role = currentUser?.role || "resident";
+
+  function getRedirectUrl(notification) {
+    const map = {
+      resident: {
+        booking_created: "/resident/bookings",
+        booking_accepted: "/resident/bookings",
+        booking_declined: "/resident/bookings",
+        booking_completed: "/resident/bookings",
+        chat_message: "/resident/bookings",
+        provider_approved: "/resident/profile",
+        provider_rejected: "/resident/find",
+      },
+      pro: {
+        booking_created: "/pro/requests",
+        booking_accepted: "/pro/jobs",
+        booking_declined: "/pro/requests",
+        booking_completed: "/pro/jobs",
+        chat_message: "/pro/jobs",
+        provider_approved: "/pro/profile",
+        provider_rejected: "/pro/profile",
+      },
+      admin: {
+        booking_created: "/admin/bookings",
+        booking_accepted: "/admin/bookings",
+        booking_declined: "/admin/bookings",
+        booking_completed: "/admin/bookings",
+        chat_message: "/admin/bookings",
+        provider_approved: "/admin/providers",
+        provider_rejected: "/admin/providers",
+      },
+    };
+
+    const defaultMap = {
+      resident: "/resident",
+      pro: "/pro",
+      admin: "/admin",
+    };
+
+    return map[role]?.[notification?.type] || defaultMap[role] || "/";
+  }
+
+  function buildRedirectUrl(notification) {
+    const base = getRedirectUrl(notification);
+    const bookingId = notification?.related_booking_id;
+    if (!bookingId) return base;
+
+    const params = new URLSearchParams();
+    params.set("booking_id", String(bookingId));
+    if (notification?.type === "chat_message") params.set("chat", "1");
+
+    return `${base}?${params.toString()}`;
+  }
 
   const fetchNotifications = useCallback(async () => {
     if (!userId) return;
@@ -43,10 +108,10 @@ export default function NotificationBell({ userId }) {
     }
   }, [userId]);
 
-  // Initial fetch + poll every 30s
+  // Initial fetch + fast polling for near-real-time updates
   useEffect(() => {
     fetchNotifications();
-    intervalRef.current = setInterval(fetchNotifications, 30000);
+    intervalRef.current = setInterval(fetchNotifications, 5000);
     return () => clearInterval(intervalRef.current);
   }, [fetchNotifications]);
 
@@ -67,9 +132,14 @@ export default function NotificationBell({ userId }) {
   async function handleOpen() {
     if (!open && bellRef.current) {
       const rect = bellRef.current.getBoundingClientRect();
+      const panelWidth = Math.min(window.innerWidth - 16, 320);
+      const left = Math.min(
+        Math.max(8, rect.left + rect.width / 2 - panelWidth / 2),
+        window.innerWidth - panelWidth - 8
+      );
       setPanelPos({
-        top: rect.bottom + 8,
-        left: rect.left,
+        top: Math.min(rect.bottom + 8, window.innerHeight - 260),
+        left,
       });
     }
     setOpen((prev) => !prev);
@@ -101,7 +171,7 @@ export default function NotificationBell({ userId }) {
   const panel = open && createPortal(
     <div
       ref={panelRef}
-      className="fixed z-[9999] w-80 rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden"
+      className="fixed z-[9999] w-[calc(100vw-16px)] max-w-sm rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden sm:w-80"
       style={{ top: panelPos.top, left: panelPos.left, maxHeight: "480px" }}
     >
       {/* Header */}
@@ -138,7 +208,12 @@ export default function NotificationBell({ userId }) {
             return (
               <button
                 key={n.id}
-                onClick={() => !n.is_read && markOneRead(n.id)}
+                onClick={() => {
+                  if (!n.is_read) markOneRead(n.id);
+                  const target = buildRedirectUrl(n);
+                  setOpen(false);
+                  navigate(target);
+                }}
                 className={[
                   "w-full text-left px-4 py-3 border-b border-slate-50 transition hover:bg-slate-50",
                   !n.is_read ? "bg-slate-50/80" : "bg-white",
@@ -180,7 +255,11 @@ export default function NotificationBell({ userId }) {
       <button
         ref={bellRef}
         onClick={handleOpen}
-        className="relative flex h-9 w-9 items-center justify-center rounded-lg text-white/70 transition hover:bg-white/10 hover:text-white"
+        className={`relative flex h-9 w-9 items-center justify-center rounded-xl transition ${
+          light
+            ? "border border-[#E9E2D2] bg-white text-[#3C463F] hover:bg-[#FAF6EE]"
+            : "text-white/70 hover:bg-white/10 hover:text-white"
+        }`}
         title="Notifications"
       >
         <svg

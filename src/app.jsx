@@ -7,7 +7,7 @@ import ResidentProfile from "./pages/residentprofile";
 import ProDashboard from "./pages/prodashboard";
 import ProRequests from "./pages/prorequests";
 import ProJobs from "./pages/projobs";
-import ProEarnings from "./pages/proearnings";
+import ProWallet from "./pages/prowallet";
 import ProProfile from "./pages/proprofile";
 import Login from "./pages/login";
 import Signup from "./pages/signup";
@@ -21,6 +21,7 @@ import AdminReports from "./pages/adminreports";
 import VerifyEmail from "./pages/verifyemail";
 import ResetPassword from "./pages/resetpassword";
 import PaymentReturn from "./pages/paymentreturn";
+import SettingsPage from "./pages/settings";
 
 function getStoredUser() {
   const raw = localStorage.getItem("user");
@@ -143,6 +144,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/resident/settings" element={<ProtectedRoute allowedRole="resident"><SettingsPage role="resident" /></ProtectedRoute>} />
 
         <Route
           path="/pro"
@@ -172,10 +174,10 @@ export default function App() {
         />
 
         <Route
-          path="/pro/earnings"
+          path="/pro/wallet"
           element={
             <ProtectedRoute allowedRole="pro">
-              <ProEarnings />
+              <ProWallet />
             </ProtectedRoute>
           }
         />
@@ -188,6 +190,8 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/pro/settings" element={<ProtectedRoute allowedRole="pro"><SettingsPage role="pro" /></ProtectedRoute>} />
+        <Route path="/admin/settings" element={<ProtectedRoute allowedRole="admin"><SettingsPage role="admin" /></ProtectedRoute>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -230,20 +230,20 @@ function AcceptModal({ request, onConfirm, onClose, processing }) {
 }
 
 // ── Stat Card ─────────────────────────────────────────────────────────────────
-function StatCard({ label, value, sub, href, icon }) {
+function StatCard({ label, value, sub, href, icon, warning }) {
   return (
-    <a href={href} className="group rounded-2xl border border-slate-100 bg-white p-5 shadow-sm transition hover:shadow-md hover:border-teal-100 block">
-      <div className="flex items-start justify-between">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-50">
+    <a href={href} className={`group block rounded-xl border bg-white p-3 shadow-sm transition hover:shadow-md sm:p-4 ${warning ? "border-orange-300 hover:border-orange-400" : "border-slate-100 hover:border-teal-100"}`}>
+      <div className="flex items-start justify-between gap-2 sm:gap-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-50 sm:h-9 sm:w-9">
           {icon}
         </div>
-        <svg className="h-4 w-4 text-slate-300 group-hover:text-teal-500 transition mt-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="mt-1 h-4 w-4 text-slate-300 transition group-hover:text-teal-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
       </div>
-      <div className="mt-4 text-2xl font-extrabold text-slate-900">{value}</div>
-      <div className="mt-1 text-sm font-semibold text-slate-600">{label}</div>
-      {sub && <div className="mt-0.5 text-xs text-slate-400">{sub}</div>}
+      <div className="mt-2 text-lg font-extrabold text-slate-900 sm:mt-3 sm:text-xl">{value}</div>
+      <div className="mt-1 text-xs font-semibold text-slate-700 sm:text-sm">{label}</div>
+      {sub && <div className="mt-0.5 text-[10px] text-slate-400 sm:text-[11px]">{sub}</div>}
     </a>
   );
 }
@@ -266,7 +266,7 @@ export default function ProDashboard() {
   const [statsData, setStatsData] = useState({
     new_requests: 0, upcoming_jobs: 0,
     completed_jobs: 0, monthly_earnings: 0,
-    most_frequent_job: "—",
+    most_frequent_job: "—", wallet_balance: 0,
   });
   const [recentRequests, setRecentRequests] = useState([]);
   const [earningsData, setEarningsData] = useState([]);
@@ -302,18 +302,23 @@ export default function ProDashboard() {
       const user = rawUser ? JSON.parse(rawUser) : null;
       if (!user?.id) { setErrorMessage("User not found. Please log in again."); setLoading(false); return; }
 
-      const [dashRes, earningsRes] = await Promise.all([
+      const [dashRes, earningsRes, walletRes] = await Promise.all([
         fetch(`${API_BASE_URL}/pro/dashboard/${user.id}`),
         fetch(`${API_BASE_URL}/pro/earnings/${user.id}`),
+        fetch(`${API_BASE_URL}/pro/wallet/${user.id}`),
       ]);
       const dashData = await dashRes.json();
       const earningsJson = await earningsRes.json();
+      const walletJson = await walletRes.json();
 
       if (dashData.status === "success") {
         setStatsData(dashData.stats || {});
         setRecentRequests(dashData.recent_requests || []);
       } else {
         setErrorMessage(dashData.message || "Failed to load dashboard.");
+      }
+      if (walletJson.status === "success") {
+        setStatsData((current) => ({ ...current, wallet_balance: walletJson.balance || 0 }));
       }
 
       // Build monthly earnings chart from paid history
@@ -384,8 +389,14 @@ export default function ProDashboard() {
     },
     {
       label: "Monthly Earnings", value: loading ? "—" : `₱${Number(statsData.monthly_earnings || 0).toLocaleString()}`,
-      sub: "Paid bookings this month", href: "/pro/earnings",
+      sub: "Paid bookings this month",       href: "/pro/wallet",
       icon: <svg className="w-5 h-5 text-teal-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    },
+    {
+      label: "Wallet Balance", value: loading ? "—" : `₱${Number(statsData.wallet_balance || 0).toFixed(2)}`,
+      sub: Number(statsData.wallet_balance || 0) < 100 ? "Low balance — top up" : "Available for commission", href: "/pro/wallet",
+      warning: Number(statsData.wallet_balance || 0) < 100,
+      icon: <svg className="w-5 h-5 text-teal-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7h18v12H3zM16 12h5M5 7V5h14v2" /></svg>
     },
     {
       label: "Top Service", value: loading ? "—" : statsData.most_frequent_job || "—",
@@ -416,7 +427,7 @@ export default function ProDashboard() {
         )}
 
         {/* Stat Cards */}
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
           {statCards.map((s) => <StatCard key={s.label} {...s} />)}
         </section>
 
@@ -430,7 +441,7 @@ export default function ProDashboard() {
                 <h2 className="text-lg font-bold text-slate-900">Earnings Overview</h2>
                 <p className="text-sm text-slate-500 mt-0.5">Monthly paid earnings from completed jobs</p>
               </div>
-              <a href="/pro/earnings" className="text-sm font-semibold text-teal-700 hover:underline">View details</a>
+              <a href="/pro/wallet" className="text-sm font-semibold text-teal-700 hover:underline">View details</a>
             </div>
 
             {earningsData.length === 0 ? (
@@ -538,7 +549,7 @@ export default function ProDashboard() {
           {[
             { href: "/pro/requests", title: "Manage Requests", desc: "Review new bookings and accept or decline them." },
             { href: "/pro/jobs", title: "View My Jobs", desc: "Check confirmed and completed service jobs." },
-            { href: "/pro/earnings", title: "Track Earnings", desc: "Monitor your completed job income and payment status." },
+            { href: "/pro/wallet", title: "Open Wallet", desc: "Manage your balance, commissions, and payment history." },
           ].map((link) => (
             <a key={link.href} href={link.href}
               className="group rounded-2xl border border-slate-100 bg-white p-5 shadow-sm transition hover:shadow-md hover:border-teal-100">

@@ -26,9 +26,15 @@ function filterPhoneInput(value) {
 }
 
 const PSGC = "https://psgc.cloud/api";
+function isMetroManilaRegion(entry) {
+  const name = (entry?.name || "").toLowerCase();
+  return name.includes("metro manila") || name.includes("national capital region") || name.includes("ncr");
+}
+
 async function fetchRegions() {
   const res = await fetch(`${PSGC}/regions`);
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data.filter(isMetroManilaRegion) : [];
 }
 async function fetchProvinces(regionCode) {
   const res = await fetch(`${PSGC}/regions/${regionCode}/provinces`);
@@ -78,25 +84,28 @@ By clicking "Create Account", you confirm that you have read, understood, and ag
 const CREDENTIAL_TYPES = [
   {
     key: "government_id",
-    label: "Government-Issued ID",
+    label: "Valid Government ID",
     required: true,
     hint: "SSS, GSIS, PhilHealth, Passport, Driver's License, Voter's ID, etc.",
   },
   {
-    key: "diploma",
-    label: "Diploma / Academic Certificate",
+    key: "experience_declaration",
+    label: "Experience Declaration",
     required: false,
-    hint: "TESDA NC, vocational diploma, or any academic credential",
+    hint: "Share your years of experience, services, and past work.",
   },
   {
-    key: "certificate",
-    label: "Skills / Trade Certificate",
+    key: "portfolio",
+    label: "Portfolio Submission",
     required: false,
-    hint: "Trade license, skills cert, company training certificate",
+    hint: "Upload photos or videos of completed jobs.",
   },
+  { key: "skill_assessment", label: "Practical Skill Assessment", required: false, hint: "Request an in-app or in-person evaluation." },
+  { key: "tesda_license", label: "TESDA / Professional License", required: false, hint: "Optional enhanced verification." },
 ];
+const EXPERIENCE_CREDENTIAL_KEYS = ["experience_declaration", "portfolio", "skill_assessment"];
 
-const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp", "application/pdf", "video/mp4", "video/webm"];
 const MAX_BYTES = 5 * 1024 * 1024;
 
 // ── sub-components ────────────────────────────────────────────────────────────
@@ -170,6 +179,9 @@ export default function SignUp() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [phoneOtp, setPhoneOtp] = useState("");
+  const [phoneOtpSent, setPhoneOtpSent] = useState(false);
+  const [phoneVerified, setPhoneVerified] = useState(false);
 
   // Step 1 — Address dropdowns
   const [regions, setRegions] = useState([]);
@@ -200,7 +212,10 @@ export default function SignUp() {
   const [showTerms, setShowTerms] = useState(false);
 
   // Step 2 — Credentials (provider only)
-  const [credentials, setCredentials] = useState({ government_id: null, diploma: null, certificate: null });
+  const [credentials, setCredentials] = useState({ government_id: null, portfolio: null, tesda_license: null });
+  const [selectedCredentials, setSelectedCredentials] = useState(["government_id"]);
+  const [experienceYears, setExperienceYears] = useState("");
+  const [experienceDescription, setExperienceDescription] = useState("");
   const [previews, setPreviews] = useState({});
 
   const isProvider = role === "provider";
@@ -212,7 +227,14 @@ export default function SignUp() {
   // Load regions once
   useEffect(() => {
     fetchRegions()
-      .then((data) => setRegions(Array.isArray(data) ? data : []))
+      .then((data) => {
+        setRegions(data);
+        if (data.length > 0 && !region) {
+          const metroManila = data[0];
+          setRegion(metroManila.code);
+          setRegionName(metroManila.name);
+        }
+      })
       .catch(() => setRegions([]));
   }, []);
 
@@ -266,9 +288,9 @@ export default function SignUp() {
     if (file.size > MAX_BYTES) { setError("File must be under 5 MB."); return; }
     setError("");
     setCredentials((c) => ({ ...c, [docType]: file }));
-    if (file.type.startsWith("image/")) {
+    if (file.type.startsWith("image/") || file.type.startsWith("video/")) {
       const reader = new FileReader();
-      reader.onload = (ev) => setPreviews((p) => ({ ...p, [docType]: { type: "image", src: ev.target.result } }));
+      reader.onload = (ev) => setPreviews((p) => ({ ...p, [docType]: { type: file.type.startsWith("video/") ? "video" : "image", src: ev.target.result } }));
       reader.readAsDataURL(file);
     } else {
       setPreviews((p) => ({ ...p, [docType]: { type: "pdf", name: file.name } }));
@@ -287,8 +309,7 @@ export default function SignUp() {
     if (!lastName.trim()) { setError("Last name is required."); return; }
     if (!email.trim()) { setError("Email is required."); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError("Please enter a valid email."); return; }
-    if (isProvider && !phone.trim()) { setError("Phone number is required for providers."); return; }
-    if (isProvider && !/^09\d{9}$/.test(phone)) { setError("Phone number must start with 09 and be 11 digits."); return; }
+    if (isProvider && (!phone.trim() || !/^09\d{9}$/.test(phone))) { setError("Phone number must start with 09 and be 11 digits."); return; }
     setStep(1);
   }
 
@@ -322,9 +343,12 @@ export default function SignUp() {
     // residents submit from step 1, so validate here
     if (!isProvider && !validateStep1()) return;
 
-    // providers must have uploaded a gov ID
-    if (isProvider && !credentials.government_id) {
-      setError("A Government-Issued ID photo is required.");
+    if (isProvider && (!credentials.government_id || !selectedCredentials.includes("government_id"))) {
+      setError("A valid Government ID is required.");
+      return;
+    }
+    if (isProvider && !selectedCredentials.some((key) => EXPERIENCE_CREDENTIAL_KEYS.includes(key))) {
+      setError("Select at least one experience credential in addition to your Government ID.");
       return;
     }
 
@@ -345,7 +369,12 @@ export default function SignUp() {
           email,
           password,
           role: isProvider ? "pro" : "resident",
-          phone: phone.trim() || null,
+          phone: phone.trim(),
+          phone_verified: phoneVerified,
+          credential_types: selectedCredentials,
+          experience_years: experienceYears ? Number(experienceYears) : null,
+          experience_description: experienceDescription.trim() || null,
+          skill_assessment_requested: selectedCredentials.includes("skill_assessment"),
           address: fullAddress,
           region: regionName,
           province: provinceName,
@@ -358,12 +387,12 @@ export default function SignUp() {
       const data = await res.json();
       if (data.status !== "success") { setError(data.message || "Signup failed."); setLoading(false); return; }
 
-      // 2. Upload credential docs (providers only)
+      // 2. Upload selected file credentials (providers only)
       const newUserId = data.user?.id;
       if (isProvider && newUserId) {
         for (const { key } of CREDENTIAL_TYPES) {
           const file = credentials[key];
-          if (!file) continue;
+          if (!file || !selectedCredentials.includes(key)) continue;
           const fd = new FormData();
           fd.append("provider_id", newUserId);
           fd.append("doc_type", key);
@@ -440,11 +469,9 @@ export default function SignUp() {
             <input className={inputCls} type="email" placeholder="juan@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
 
-          {isProvider && (
-            <Field label="Phone Number *">
-              <input className={inputCls} type="tel" placeholder="09XXXXXXXXX" value={phone} maxLength={11} onChange={(e) => setPhone(filterPhoneInput(e.target.value))} />
-            </Field>
-          )}
+          {isProvider && <Field label="Phone Number *">
+            <input className={inputCls} type="tel" placeholder="09XXXXXXXXX" value={phone} maxLength={11} onChange={(e) => setPhone(filterPhoneInput(e.target.value))} />
+          </Field>}
 
           <button type="button" onClick={goNext}
             className="w-full rounded-full bg-teal-700 py-3 font-semibold text-white shadow-md transition hover:bg-teal-800">
@@ -567,21 +594,33 @@ export default function SignUp() {
             <p className="font-semibold">Why we need this</p>
             <p className="mt-0.5">To protect residents, we verify all service providers before approval. Your documents are only seen by our admin team and kept strictly confidential.</p>
           </div>
-
           {CREDENTIAL_TYPES.map(({ key, label, required, hint }) => (
             <div key={key}>
-              <label className="text-sm font-semibold text-slate-700">
+              <label className="flex items-start gap-3 text-sm font-semibold text-slate-700">
+                <input type="checkbox" checked={selectedCredentials.includes(key)} disabled={required} onChange={() => setSelectedCredentials((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-700" />
+                <span>
                 {label}{" "}
                 {required
                   ? <span className="text-red-500">*</span>
                   : <span className="font-normal text-slate-400">(optional)</span>}
+                </span>
               </label>
               <p className="mt-0.5 text-xs text-slate-400">{hint}</p>
+              {key === "experience_declaration" && selectedCredentials.includes(key) ? (
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <input className={inputCls} type="number" min="0" placeholder="Years of experience" value={experienceYears} onChange={(e) => setExperienceYears(e.target.value)} />
+                  <input className={`${inputCls} sm:col-span-2`} placeholder="Describe your past work" value={experienceDescription} onChange={(e) => setExperienceDescription(e.target.value)} />
+                </div>
+              ) : key === "skill_assessment" && selectedCredentials.includes(key) ? (
+                <div className="mt-2 rounded-xl bg-teal-50 p-3 text-xs text-teal-800">We will contact you to schedule a practical evaluation.</div>
+              ) : selectedCredentials.includes(key) && (
               <div className="mt-2">
                 {previews[key] ? (
                   <div className="relative overflow-hidden rounded-xl border-2 border-teal-400">
                     {previews[key].type === "image" ? (
                       <img src={previews[key].src} alt={label} className="h-36 w-full object-cover" />
+                    ) : previews[key].type === "video" ? (
+                      <video src={previews[key].src} controls className="h-36 w-full object-cover" />
                     ) : (
                       <div className="flex items-center gap-3 bg-red-50 px-4 py-4">
                         <span className="text-3xl">📄</span>
@@ -602,14 +641,20 @@ export default function SignUp() {
                     <span className="mt-1 text-sm font-medium text-slate-600">
                       Click to upload {required ? "(required)" : "(optional)"}
                     </span>
-                    <span className="text-xs text-slate-400">JPEG, PNG, WEBP or PDF · Max 5 MB</span>
-                    <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+                    <span className="text-xs text-slate-400">JPEG, PNG, WEBP, MP4, WEBM or PDF · Max 5 MB</span>
+                    <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,application/pdf"
                       className="hidden" onChange={(e) => handleFileChange(key, e)} />
                   </label>
                 )}
               </div>
+              )}
             </div>
           ))}
+
+          <div className="rounded-2xl border border-teal-100 bg-teal-50 p-4">
+            <p className="text-sm font-semibold text-teal-900">Submitted Credentials</p>
+            <p className="mt-2 text-sm text-teal-800">{selectedCredentials.map((key) => CREDENTIAL_TYPES.find((item) => item.key === key)?.label.replace("Valid ", "")).join(" ✓ | ")} ✓</p>
+          </div>
 
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={() => { setError(""); setStep(1); }}

@@ -1,10 +1,67 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@500;600;700;800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-
 html {
     scroll-behavior: smooth;
+    overflow-x: hidden;
+}
+
+body, #root {
+    overflow-x: hidden;
+    max-width: 100vw;
+    font-family: 'Inter', sans-serif;
+    background: #FAF6EE;
+    color: #1E2622;
+}
+
+@layer base {
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Sora', sans-serif;
+  }
+}
+
+@layer utilities {
+  .text-slate-900 { color: #1E2622 !important; }
+  .text-slate-800, .text-slate-700 { color: #3C463F !important; }
+  .text-slate-600, .text-slate-500 { color: #707B72 !important; }
+  .text-slate-400, .text-slate-300 { color: #A6AEA1 !important; }
+  .border-slate-100, .border-slate-200 { border-color: #E9E2D2 !important; }
+  .bg-slate-50 { background-color: #FAF6EE !important; }
+  .bg-teal-50 { background-color: #EFF6F4 !important; }
+  .text-teal-700, .text-teal-600 { color: #0F6B5C !important; }
+  .bg-teal-700 { background-color: #0F6B5C !important; }
+  .hover\:bg-teal-800:hover { background-color: #0B4A40 !important; }
+  .bg-amber-100 { background-color: #FBEACB !important; }
+  .text-amber-700 { color: #D18F26 !important; }
+  .bg-rose-100, .bg-red-50 { background-color: #F7E4DD !important; }
+  .text-rose-700, .text-red-700 { color: #D9694E !important; }
+
+  div[class*="rounded-3xl"][class*="bg-white"],
+  div[class*="rounded-2xl"][class*="bg-white"],
+  section[class*="rounded-3xl"][class*="bg-white"],
+  section[class*="rounded-2xl"][class*="bg-white"] {
+    border-color: #E9E2D2 !important;
+    border-radius: 16px !important;
+    box-shadow: 0 1px 2px rgba(30,38,34,.04), 0 8px 20px -12px rgba(30,38,34,.12) !important;
+  }
+
+  .prototype-card {
+    border: 1px solid #E9E2D2;
+    border-radius: 16px;
+    background: #FFFFFF;
+    box-shadow: 0 1px 2px rgba(30,38,34,.04), 0 8px 20px -12px rgba(30,38,34,.12);
+  }
+  .prototype-pill {
+    border-radius: 9999px;
+  }
+
+  button[class*="bg-teal-800"]:hover,
+  a[class*="bg-teal-800"]:hover {
+    background-color: #e89525 !important;
+  }
 }
 
 

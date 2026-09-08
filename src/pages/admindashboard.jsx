@@ -100,31 +100,31 @@ function ServiceBarChart({ data, total }) {
 function KpiCard({ label, value, sub, accent, icon, loading }) {
   if (loading) {
     return (
-      <div className={`relative overflow-hidden rounded-2xl p-6 shadow-sm animate-pulse ${accent}`}>
-        <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-white/10" />
-        <div className="absolute -right-2 bottom-2 h-16 w-16 rounded-full bg-white/10" />
-        <div className="relative flex items-start justify-between">
-          <div className="space-y-3 flex-1">
-            <div className="h-3 w-24 rounded bg-white/30" />
-            <div className="h-9 w-16 rounded bg-white/30" />
-            <div className="h-3 w-32 rounded bg-white/20" />
+      <div className={`relative overflow-hidden rounded-xl p-3 shadow-sm animate-pulse sm:p-4 ${accent}`}>
+        <div className="absolute -right-4 -top-4 h-20 w-20 rounded-full bg-white/10" />
+        <div className="absolute -right-2 bottom-2 h-12 w-12 rounded-full bg-white/10" />
+        <div className="relative flex items-start justify-between gap-3">
+          <div className="space-y-2 flex-1">
+            <div className="h-3 w-20 rounded bg-white/30" />
+            <div className="h-7 w-14 rounded bg-white/30" />
+            <div className="h-3 w-24 rounded bg-white/20" />
           </div>
-          <div className="h-10 w-10 rounded-xl bg-white/20" />
+          <div className="h-8 w-8 rounded-lg bg-white/20 sm:h-9 sm:w-9" />
         </div>
       </div>
     );
   }
   return (
-    <div className={`relative overflow-hidden rounded-2xl p-6 text-white shadow-sm transition hover:shadow-md ${accent}`}>
-      <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-white/10" />
-      <div className="absolute -right-2 bottom-2 h-16 w-16 rounded-full bg-white/10" />
-      <div className="relative flex items-start justify-between">
-        <div>
-          <div className="text-xs font-bold uppercase tracking-widest opacity-80">{label}</div>
-          <div className="mt-2 text-4xl font-extrabold">{value}</div>
-          {sub && <div className="mt-2 text-xs opacity-70">{sub}</div>}
+    <div className={`relative overflow-hidden rounded-xl p-3 text-white shadow-sm transition hover:shadow-md sm:p-4 ${accent}`}>
+      <div className="absolute -right-4 -top-4 h-20 w-20 rounded-full bg-white/10" />
+      <div className="absolute -right-2 bottom-2 h-12 w-12 rounded-full bg-white/10" />
+      <div className="relative flex items-start justify-between gap-2 sm:gap-3">
+        <div className="min-w-0">
+          <div className="text-[9px] font-bold uppercase tracking-[0.15em] opacity-80 sm:text-[10px] sm:tracking-[0.2em]">{label}</div>
+          <div className="mt-1.5 text-xl font-extrabold leading-none sm:mt-2 sm:text-3xl">{value}</div>
+          {sub && <div className="mt-1.5 text-[10px] opacity-70 sm:mt-2 sm:text-[11px]">{sub}</div>}
         </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20">{icon}</div>
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/20 sm:h-9 sm:w-9">{icon}</div>
       </div>
     </div>
   );
@@ -229,7 +229,7 @@ export default function AdminDashboard() {
       <div className="space-y-6">
 
         {/* KPI Cards */}
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           <KpiCard loading={loading} label="Total Users" value={stats.total_users}
             sub={`${stats.total_residents} residents · ${stats.total_pros} providers`}
             accent="bg-teal-700"

@@ -1,13 +1,13 @@
 from fastapi import FastAPI, Query, Request, File, UploadFile, Form
 from fastapi.staticfiles import StaticFiles
-import shutil, math
+import shutil, math, hashlib, json
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
-from sqlalchemy import text
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import text, inspect
 from sqlalchemy.orm import Session
 from database import engine, Base, SessionLocal
 from datetime import datetime, timedelta
-from models import User, Booking, ProviderService, ServiceCategory, Feedback, ProviderDocument, Notification
+from models import User, Booking, ProviderService, ServiceCategory, Feedback, ProviderDocument, Notification, ChatMessage, CompletionProof, ProviderWalletTransaction
 import requests as http_requests 
 import base64
 
@@ -23,12 +23,14 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 ALLOWED_DOC_TYPES = {
     "government_id": "Government-Issued ID",
+    "portfolio": "Portfolio Submission",
+    "tesda_license": "TESDA / Professional License",
     "diploma": "Diploma / Academic Certificate",
     "certificate": "Skills / Trade Certificate",
     "other": "Other Document",
 }
 
-ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp", "application/pdf", "video/mp4", "video/webm"}
 MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB per file
 
 PROFILE_PIC_DIR = "uploads/profile_pictures"
@@ -41,22 +43,13 @@ MAX_PROFILE_PIC_BYTES = 3 * 1024 * 1024  # 3 MB
 
 app = FastAPI(title="SerbisyoNear API")
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://192.168.0.100:5173",
-    "http://192.168.100.9:5173",
-    "http://192.168.1.31:5173",
-    "http://10.11.193.248:5173",
-    "http://10.11.193.248:5173",
-    "http://10.243.97.236:5173",
-    "http://192.168.100.238:5173",
-    
-]
+BOOKING_TYPING_STATUS = {}
+
+LOCAL_NETWORK_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origin_regex=LOCAL_NETWORK_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,7 +57,133 @@ app.add_middleware(
 
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
+CHAT_ATTACHMENT_DIR = "uploads/chat_attachments"
+os.makedirs(CHAT_ATTACHMENT_DIR, exist_ok=True)
+
+
+class SupportChatRequest(BaseModel):
+    message: str
+    role: str = "resident"
+    history: list[dict[str, str]] = Field(default_factory=list)
+
+
+@app.post("/support/chat")
+def support_chat(payload: SupportChatRequest):
+    message = payload.message.strip()
+    if not message:
+        return {"status": "error", "message": "Please enter a question."}
+    if len(message) > 2000:
+        return {"status": "error", "message": "Please keep your question under 2,000 characters."}
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return {"status": "error", "message": "The AI support assistant is not configured yet. Please contact an administrator."}
+
+    role = payload.role.strip().lower() or "resident"
+    transcript = []
+    for item in payload.history[-8:]:
+        text_value = (item.get("text") or "").strip()
+        item_role = item.get("role")
+        if text_value and item_role in {"user", "assistant"}:
+            transcript.append({"role": "user" if item_role == "user" else "model", "parts": [{"text": text_value[:2000]}]})
+    if not transcript or transcript[-1]["role"] != "user" or transcript[-1]["parts"][0]["text"] != message:
+        transcript.append({"role": "user", "parts": [{"text": message}]})
+
+    system_instruction = (
+        "You are SerbisyoNear's helpful support assistant. "
+        "SerbisyoNear connects Metro Manila residents with verified service providers. "
+        "Give concise, friendly instructions about bookings, provider requests, payments, profiles, "
+        "completion-proof confirmation, notifications, and account access. "
+        "Do not invent booking data, make policy promises, request passwords or payment secrets, "
+        "or claim to perform actions. If the user needs account-specific help, direct them to the relevant page "
+        "or tell them to contact an administrator. The current user role is " + role + "."
+    )
+    configured_model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+    models = [configured_model]
+    for fallback_model in ("gemini-3.6-flash", "gemini-flash-latest"):
+        if fallback_model not in models:
+            models.append(fallback_model)
+    for model in models:
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        try:
+            response = http_requests.post(
+                endpoint,
+                params={"key": api_key},
+                json={
+                    "system_instruction": {"parts": [{"text": system_instruction}]},
+                    "contents": transcript,
+                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 500},
+                },
+                timeout=30,
+            )
+        except http_requests.RequestException:
+            return {"status": "error", "message": "The AI support assistant could not be reached. Please try again."}
+        if response.status_code in {400, 404} and model != models[-1]:
+            continue
+        if response.status_code >= 400:
+            return {"status": "error", "message": "The AI support assistant returned an error. Please try again."}
+        try:
+            response_data = response.json()
+            reply = (
+                response_data.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+                .strip()
+            )
+            if not reply:
+                raise ValueError("Gemini returned an empty response.")
+            return {"status": "success", "reply": reply}
+        except (KeyError, IndexError, TypeError, ValueError):
+            return {"status": "error", "message": "The AI support assistant returned an invalid response. Please try again."}
+    return {"status": "error", "message": "The AI support assistant is unavailable. Please try again."}
+
 Base.metadata.create_all(bind=engine)
+
+user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+for user_column, user_type in (
+    ("phone_verified", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("phone_otp_hash", "VARCHAR(128) NULL"),
+    ("phone_otp_expires", "DATETIME NULL"),
+    ("credential_types", "TEXT NULL"),
+    ("experience_years", "INTEGER NULL"),
+    ("experience_description", "TEXT NULL"),
+    ("skill_assessment_requested", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("enhanced_verification_status", "VARCHAR(30) NULL"),
+):
+    if user_column not in user_columns:
+        with engine.begin() as connection:
+            connection.execute(text(f"ALTER TABLE users ADD COLUMN {user_column} {user_type}"))
+
+wallet_columns = {column["name"] for column in inspect(engine).get_columns("provider_wallet_transactions")}
+for wallet_column, wallet_type in (
+    ("transaction_id", "VARCHAR(80) NULL"),
+    ("current_hash", "VARCHAR(64) NULL"),
+    ("previous_transaction_hash", "VARCHAR(64) NULL"),
+):
+    if wallet_column not in wallet_columns:
+        with engine.begin() as connection:
+            connection.execute(text(f"ALTER TABLE provider_wallet_transactions ADD COLUMN {wallet_column} {wallet_type}"))
+
+if "is_read" not in {column["name"] for column in inspect(engine).get_columns("chat_messages")}:
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE chat_messages ADD COLUMN is_read BOOLEAN NOT NULL DEFAULT FALSE"))
+
+if "attachment_url" not in {column["name"] for column in inspect(engine).get_columns("chat_messages")}:
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE chat_messages ADD COLUMN attachment_url VARCHAR(500) NULL"))
+
+if "payment_method" not in {column["name"] for column in inspect(engine).get_columns("bookings")}:
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE bookings ADD COLUMN payment_method VARCHAR(20) NULL"))
+
+if "needs_admin_review" not in {column["name"] for column in inspect(engine).get_columns("bookings")}:
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE bookings ADD COLUMN needs_admin_review BOOLEAN NOT NULL DEFAULT FALSE"))
+
+COMPLETION_PROOF_DIR = "uploads/completion_proofs"
+os.makedirs(COMPLETION_PROOF_DIR, exist_ok=True)
+MAX_COMPLETION_REJECTIONS = 3
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
@@ -126,10 +245,71 @@ def create_notification(db, user_id: int, title: str, message: str, notif_type: 
     )
     db.add(notif)
 
+
+def get_user_display_address(user):
+    if user is None:
+        return None
+
+    if user.address and str(user.address).strip():
+        return user.address.strip()
+
+    parts = [
+        getattr(user, "street", None),
+        getattr(user, "barangay", None),
+        getattr(user, "city", None),
+        getattr(user, "province", None),
+        getattr(user, "region", None),
+    ]
+    address = ", ".join(str(part).strip() for part in parts if part and str(part).strip())
+    return address or None
+
+
 def get_paymongo_auth():
     secret_key = os.getenv("PAYMONGO_SECRET_KEY", "")
     encoded = base64.b64encode(f"{secret_key}:".encode()).decode()
     return f"Basic {encoded}"
+
+WALLET_FEE_RATE = 0.02
+
+def wallet_balance(db, provider_id: int):
+    row = (db.query(ProviderWalletTransaction)
+           .filter(ProviderWalletTransaction.provider_id == provider_id,
+                   ProviderWalletTransaction.status == "completed")
+           .order_by(ProviderWalletTransaction.id.desc()).first())
+    return row.balance_after if row else 0
+
+def append_wallet_transaction(db, provider_id: int, amount: int, transaction_type: str,
+                              booking_id: int = None, payment_id: str = None,
+                              reference: str = None, description: str = None):
+    previous = (db.query(ProviderWalletTransaction)
+                .filter(ProviderWalletTransaction.provider_id == provider_id)
+                .order_by(ProviderWalletTransaction.id.desc()).first())
+    before = wallet_balance(db, provider_id)
+    after = before + amount
+    payload = {"provider_id": provider_id, "booking_id": booking_id,
+               "type": transaction_type, "amount": amount, "balance_after": after,
+               "payment_id": payment_id, "reference": reference,
+               "previous_hash": previous.transaction_hash if previous else None}
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+    transaction_id = secrets.token_urlsafe(24)
+    row = ProviderWalletTransaction(transaction_id=transaction_id, provider_id=provider_id, booking_id=booking_id,
+        transaction_type=transaction_type, amount=amount, balance_after=after,
+        payment_id=payment_id, reference=reference, status="completed",
+        previous_hash=previous.transaction_hash if previous else None,
+        transaction_hash=digest, current_hash=digest,
+        previous_transaction_hash=previous.transaction_hash if previous else None,
+        description=description)
+    db.add(row)
+    return row
+
+def pending_wallet_topup(db, provider_id: int, amount: int, payment_id: str):
+    row = ProviderWalletTransaction(transaction_id=secrets.token_urlsafe(24), provider_id=provider_id, transaction_type="top_up",
+        amount=amount, balance_after=wallet_balance(db, provider_id), payment_id=payment_id,
+        reference="paymongo_pending", status="pending",
+        previous_hash=None, transaction_hash=hashlib.sha256(f"pending:{provider_id}:{payment_id}".encode()).hexdigest(),
+        description="Pending PayMongo wallet top-up")
+    db.add(row)
+    return row
 
 
 class UpdateLocationRequest(BaseModel):
@@ -153,8 +333,12 @@ class UpdateProviderServicesRequest(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     full_name: str
+    email: EmailStr | None = None
     phone: str | None = None
     address: str | None = None
+    region: str | None = None
+    city: str | None = None
+    barangay: str | None = None
 
 class CreateBookingRequest(BaseModel):
     resident_id: int
@@ -178,9 +362,56 @@ class SignupRequest(BaseModel):
     city: str | None = None
     barangay: str | None = None
     street: str | None = None
+    phone_verified: bool = False
+    credential_types: list[str] = Field(default_factory=list)
+    experience_years: int | None = None
+    experience_description: str | None = None
+    skill_assessment_requested: bool = False
+
+class PhoneOtpRequest(BaseModel):
+    phone: str
+    code: str | None = None
+
+PHONE_OTP_CACHE = {}
+
+def normalize_phone(phone: str) -> str:
+    digits = re.sub(r"\D", "", phone or "")
+    return f"+63{digits[1:]}" if digits.startswith("09") and len(digits) == 11 else digits
+
+@app.post("/signup/phone-otp/send")
+def send_signup_phone_otp(payload: PhoneOtpRequest):
+    phone = normalize_phone(payload.phone)
+    if not re.fullmatch(r"\+639\d{9}", phone):
+        return {"status": "error", "message": "Enter a valid Philippine mobile number."}
+    code = f"{secrets.randbelow(1000000):06d}"
+    PHONE_OTP_CACHE[phone] = {"hash": hashlib.sha256(code.encode()).hexdigest(), "expires": datetime.utcnow() + timedelta(minutes=5)}
+    # Integrate a provider such as Twilio by setting SMS_* environment variables.
+    # Until configured, return the code only in development so local signup remains testable.
+    if os.getenv("SMS_PROVIDER") == "twilio":
+        try:
+            from twilio.rest import Client
+            Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")).messages.create(
+                body=f"Your SerbisyoNear verification code is {code}. It expires in 5 minutes.",
+                from_=os.getenv("TWILIO_FROM_NUMBER"), to=phone,
+            )
+            return {"status": "success", "message": "Verification code sent."}
+        except Exception:
+            return {"status": "error", "message": "We could not send the verification code. Please try again."}
+    return {"status": "success", "message": "Verification code sent.", "development_code": code}
+
+@app.post("/signup/phone-otp/verify")
+def verify_signup_phone_otp(payload: PhoneOtpRequest):
+    phone = normalize_phone(payload.phone)
+    record = PHONE_OTP_CACHE.get(phone)
+    if not record or not payload.code or datetime.utcnow() > record["expires"]:
+        return {"status": "error", "message": "That code is invalid or expired. Request a new code."}
+    if hashlib.sha256(payload.code.encode()).hexdigest() != record["hash"]:
+        return {"status": "error", "message": "Incorrect verification code."}
+    PHONE_OTP_CACHE.pop(phone, None)
+    return {"status": "success", "message": "Phone number verified.", "phone": phone}
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    identifier: str
     password: str
 
 class LocationData(BaseModel):
@@ -198,6 +429,18 @@ class CancelBookingRequest(BaseModel):
 
 class AcceptBookingRequest(BaseModel):
     note: str | None = None
+
+class WalletTopUpRequest(BaseModel):
+    amount: int = Field(..., ge=1, le=1000000)
+
+class SendBookingMessageRequest(BaseModel):
+    sender_id: int
+    message: str | None = None
+    attachment_url: str | None = None
+
+class SetTypingStatusRequest(BaseModel):
+    sender_id: int
+    is_typing: bool
 
 @app.post("/profile/{user_id}/upload-photo")
 async def upload_profile_picture(user_id: int, file: UploadFile = File(...)):
@@ -236,6 +479,103 @@ async def upload_profile_picture(user_id: int, file: UploadFile = File(...)):
             "message": "Profile picture updated",
             "profile_picture": public_url,
         }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.get("/pro/wallet/{provider_id}")
+def get_provider_wallet(provider_id: int):
+    db = SessionLocal()
+    try:
+        provider = db.query(User).filter(User.id == provider_id, User.role == "pro").first()
+        if not provider:
+            return {"status": "error", "message": "Provider not found"}
+        transactions = (db.query(ProviderWalletTransaction)
+            .filter(ProviderWalletTransaction.provider_id == provider_id)
+            .order_by(ProviderWalletTransaction.id.desc()).limit(50).all())
+        return {"status": "success", "balance": wallet_balance(db, provider_id),
+                "transactions": [{"id": t.id, "transaction_id": t.transaction_id, "type": t.transaction_type, "amount": t.amount,
+                    "resulting_balance": t.balance_after, "balance_after": t.balance_after, "status": t.status, "booking_id": t.booking_id,
+                    "payment_id": t.payment_id, "hash": t.transaction_hash, "created_at": str(t.created_at)} for t in transactions]}
+    finally:
+        db.close()
+
+@app.post("/pro/wallet/{provider_id}/top-up")
+def create_wallet_topup(provider_id: int, payload: WalletTopUpRequest):
+    db = SessionLocal()
+    try:
+        provider = db.query(User).filter(User.id == provider_id, User.role == "pro").first()
+        if not provider:
+            return {"status": "error", "message": "Provider not found"}
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+        response = http_requests.post("https://api.paymongo.com/v1/links", json={"data": {"attributes": {
+            "amount": payload.amount * 100, "description": f"SerbisyoNear wallet top-up for provider #{provider_id}",
+            "remarks": f"Wallet top-up provider #{provider_id}",
+            "redirect": {"success": f"{frontend_url}/pro/wallet", "failed": f"{frontend_url}/pro/wallet"},
+            "payment_method_types": ["gcash"]}}}, headers={"Authorization": get_paymongo_auth(), "Content-Type": "application/json"}, timeout=30)
+        result = response.json()
+        if response.status_code not in (200, 201):
+            return {"status": "error", "message": result.get("errors", [{}])[0].get("detail", "PayMongo error")}
+        data = result["data"]; payment_id = data["id"]
+        pending_wallet_topup(db, provider_id, payload.amount, payment_id)
+        db.commit()
+        return {"status": "success", "checkout_url": data["attributes"]["checkout_url"], "payment_id": payment_id, "payment_status": "pending"}
+    except Exception as e:
+        db.rollback(); return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.get("/pro/wallet/{provider_id}/top-up/verify/{payment_id}")
+def verify_wallet_topup(provider_id: int, payment_id: str):
+    db = SessionLocal()
+    try:
+        pending = (db.query(ProviderWalletTransaction).filter(ProviderWalletTransaction.provider_id == provider_id,
+            ProviderWalletTransaction.payment_id == payment_id, ProviderWalletTransaction.status == "pending").first())
+        if not pending:
+            existing = (db.query(ProviderWalletTransaction).filter(ProviderWalletTransaction.provider_id == provider_id, ProviderWalletTransaction.payment_id == payment_id, ProviderWalletTransaction.status == "completed").first())
+            return {"status": "success", "payment_status": "paid", "balance": wallet_balance(db, provider_id)} if existing else {"status": "error", "message": "Pending top-up not found"}
+        response = http_requests.get(f"https://api.paymongo.com/v1/links/{payment_id}", headers={"Authorization": get_paymongo_auth()}, timeout=30)
+        result = response.json()
+        if response.status_code != 200: return {"status": "error", "message": "Failed to verify payment"}
+        if result["data"]["attributes"]["status"] != "paid":
+            pending.status = "rejected"
+            db.commit()
+            return {"status": "success", "payment_status": "failed", "balance": wallet_balance(db, provider_id)}
+        pending.status = "superseded"
+        append_wallet_transaction(db, provider_id, pending.amount, "top_up", payment_id=payment_id, reference="paymongo", description="PayMongo wallet top-up")
+        db.commit()
+        return {"status": "success", "payment_status": "paid", "balance": wallet_balance(db, provider_id)}
+    except Exception as e:
+        db.rollback(); return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.post("/payment/paymongo/webhook")
+async def paymongo_wallet_webhook(request: Request):
+    payload = await request.json()
+    event = payload.get("data", {}).get("attributes", {}).get("data", payload.get("data", {}))
+    payment_id = event.get("id") or event.get("attributes", {}).get("id")
+    event_status = event.get("attributes", {}).get("status") or payload.get("data", {}).get("attributes", {}).get("type")
+    if not payment_id:
+        return {"status": "ignored", "message": "Missing PayMongo payment reference."}
+    db = SessionLocal()
+    try:
+        pending = (db.query(ProviderWalletTransaction)
+            .filter(ProviderWalletTransaction.payment_id == payment_id, ProviderWalletTransaction.status == "pending")
+            .first())
+        if not pending:
+            return {"status": "success", "message": "Event already processed or not a wallet top-up."}
+        if event_status in {"paid", "succeeded", "payment.paid"}:
+            pending.status = "superseded"
+            append_wallet_transaction(db, pending.provider_id, pending.amount, "top_up",
+                                      payment_id=payment_id, reference="paymongo_webhook",
+                                      description="PayMongo wallet top-up")
+        else:
+            pending.status = "rejected"
+        db.commit()
+        return {"status": "success"}
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
@@ -326,6 +666,71 @@ def create_payment_link(booking_id: int):
             "link_id": link_id,
         }
 
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+
+@app.post("/payment/cash/{booking_id}")
+def request_cash_payment(booking_id: int):
+    """Resident opts to pay in cash. Marks payment as pending provider confirmation."""
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+
+        if booking.payment_status == "paid":
+            return {"status": "error", "message": "Booking already paid"}
+
+        booking.payment_method = "cash"
+        booking.payment_status = "cash_pending"
+        db.commit()
+
+        create_notification(
+            db,
+            user_id=booking.provider_id,
+            title="Cash Payment Selected",
+            message=f"The resident chose to pay in cash for {booking.service_name} (Booking #{booking.id}). Please confirm once you've received payment.",
+            notif_type="payment_pending",
+            booking_id=booking.id,
+        )
+
+        return {"status": "success", "payment_status": booking.payment_status}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+
+@app.put("/payment/cash/{booking_id}/confirm")
+def confirm_cash_payment(booking_id: int):
+    """Provider confirms cash was received."""
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+
+        if booking.payment_method != "cash" or booking.payment_status not in ("cash_pending", "unpaid"):
+            return {"status": "error", "message": "This booking is not awaiting a cash payment confirmation"}
+
+        booking.payment_status = "paid"
+        db.commit()
+
+        create_notification(
+            db,
+            user_id=booking.resident_id,
+            title="Payment Confirmed",
+            message=f"Your cash payment of ₱{booking.amount} for {booking.service_name} (Booking #{booking.id}) has been confirmed by the provider.",
+            notif_type="booking_completed",
+            booking_id=booking.id,
+        )
+
+        return {"status": "success", "payment_status": booking.payment_status}
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
@@ -477,10 +882,15 @@ def cancel_resident_booking(booking_id: int, payload: CancelBookingRequest = Non
         booking = db.query(Booking).filter(Booking.id == booking_id).first()
         if not booking:
             return {"status": "error", "message": "Booking not found"}
-        if booking.status != "pending":
-            return {"status": "error", "message": "Only pending bookings can be cancelled"}
+        if booking.status not in {"pending", "confirmed", "pending_confirmation"}:
+            return {"status": "error", "message": "This booking can no longer be cancelled"}
         booking.status = "cancelled"
         booking.cancel_reason = payload.reason if payload else None
+        if booking.payment_status == "paid":
+            booking.payment_status = "refunded"
+            if not db.query(ProviderWalletTransaction).filter(ProviderWalletTransaction.booking_id == booking.id, ProviderWalletTransaction.transaction_type == "refund").first():
+                prior = db.query(ProviderWalletTransaction).filter(ProviderWalletTransaction.booking_id == booking.id, ProviderWalletTransaction.transaction_type.in_(["fee", "commission_deduction"])).first()
+                if prior: append_wallet_transaction(db, booking.provider_id, abs(prior.amount), "refund", booking_id=booking.id, reference=f"booking:{booking.id}", description="Booking cancellation commission refund")
         db.commit()
         return {"status": "success", "message": "Booking cancelled successfully"}
     except Exception as e:
@@ -1249,7 +1659,10 @@ def get_profile(user_id: int):
                 "email": user.email,
                 "role": user.role,
                 "phone": user.phone,
-                "address": user.address,
+                "address": get_user_display_address(user),
+                "region": user.region,
+                "city": user.city,
+                "barangay": user.barangay,
                 "verification_status": user.verification_status,
                 "created_at": str(user.created_at) if user.created_at else None,
                 "lat": user.lat,
@@ -1272,8 +1685,19 @@ def update_profile(user_id: int, payload: UpdateProfileRequest):
             return {"status": "error", "message": "User not found"}
 
         user.full_name = payload.full_name
+        if payload.email and payload.email != user.email:
+            existing = db.query(User).filter(User.email == payload.email, User.id != user_id).first()
+            if existing:
+                return {"status": "error", "message": "That email is already in use."}
+            user.email = payload.email
         user.phone = payload.phone
         user.address = payload.address
+        if payload.region is not None:
+            user.region = payload.region
+        if payload.city is not None:
+            user.city = payload.city
+        if payload.barangay is not None:
+            user.barangay = payload.barangay
 
         db.commit()
         db.refresh(user)
@@ -1288,9 +1712,28 @@ def update_profile(user_id: int, payload: UpdateProfileRequest):
                 "role": user.role,
                 "phone": user.phone,
                 "address": user.address,
+                "region": user.region,
+                "city": user.city,
+                "barangay": user.barangay,
                 "verification_status": user.verification_status,
             },
         }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.delete("/account/{user_id}")
+def delete_account(user_id: int):
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return {"status": "error", "message": "User not found"}
+        user.is_archived = True
+        db.commit()
+        return {"status": "success", "message": "Account deleted successfully."}
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
@@ -1384,9 +1827,14 @@ def cancel_resident_booking_simple(booking_id: int):
         booking = db.query(Booking).filter(Booking.id == booking_id).first()
         if not booking:
             return {"status": "error", "message": "Booking not found"}
-        if booking.status != "pending":
-            return {"status": "error", "message": "Only pending bookings can be cancelled"}
+        if booking.status not in {"pending", "confirmed", "pending_confirmation"}:
+            return {"status": "error", "message": "This booking can no longer be cancelled"}
         booking.status = "cancelled"
+        if booking.payment_status == "paid":
+            booking.payment_status = "refunded"
+            prior = db.query(ProviderWalletTransaction).filter(ProviderWalletTransaction.booking_id == booking.id, ProviderWalletTransaction.transaction_type.in_(["fee", "commission_deduction"])).first()
+            if prior and not db.query(ProviderWalletTransaction).filter(ProviderWalletTransaction.booking_id == booking.id, ProviderWalletTransaction.transaction_type == "refund").first():
+                append_wallet_transaction(db, booking.provider_id, abs(prior.amount), "refund", booking_id=booking.id, reference=f"booking:{booking.id}", description="Booking cancellation commission refund")
         db.commit()
         return {"status": "success", "message": "Booking cancelled successfully"}
     except Exception as e:
@@ -1406,6 +1854,13 @@ def complete_provider_job(booking_id: int):
         if booking.payment_status != "paid":
             return {"status": "error", "message": "Resident must pay before job can be marked complete"}
 
+        if booking.status != "pending_confirmation":
+            return {"status": "error", "message": "Resident must confirm proof of completion before this job can be marked complete"}
+
+        fee = math.ceil((booking.amount or 0) * WALLET_FEE_RATE)
+        if wallet_balance(db, booking.provider_id) < fee:
+            return {"status": "error", "message": "Insufficient wallet balance for the 2% completion fee"}
+        append_wallet_transaction(db, booking.provider_id, -fee, "commission_deduction", booking_id=booking.id, reference=f"booking:{booking.id}", description="2% platform fee")
         booking.status = "completed"
 
         create_notification(
@@ -1419,6 +1874,260 @@ def complete_provider_job(booking_id: int):
 
         db.commit()
         return {"status": "success", "message": "Job marked as completed"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+
+@app.post("/bookings/{booking_id}/completion-proof")
+async def submit_completion_proof(booking_id: int, provider_id: int = Form(...), file: UploadFile = File(...)):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+        if booking.provider_id != provider_id:
+            return {"status": "error", "message": "You are not the provider for this booking"}
+        if booking.needs_admin_review:
+            return {"status": "error", "message": "This booking is flagged for admin review. Please contact support."}
+        if booking.status not in ("confirmed", "pending_confirmation"):
+            return {"status": "error", "message": "Proof can only be submitted for a confirmed booking"}
+
+        content_type = file.content_type or ""
+        if content_type not in ALLOWED_IMAGE_MIME:
+            return {"status": "error", "message": "Only JPEG, PNG, or WEBP images are allowed"}
+
+        contents = await file.read()
+        if len(contents) > MAX_PROFILE_PIC_BYTES:
+            return {"status": "error", "message": "Image too large. Max 3 MB."}
+
+        import uuid
+        ext = content_type.split("/")[-1]
+        filename = f"{uuid.uuid4().hex}.{ext}"
+        file_path = os.path.join(COMPLETION_PROOF_DIR, filename)
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        public_url = f"/uploads/completion_proofs/{filename}"
+
+        prior_attempts = db.query(CompletionProof).filter(CompletionProof.booking_id == booking_id).count()
+        attempt_number = prior_attempts + 1
+
+        proof = CompletionProof(
+            booking_id=booking_id,
+            photo_url=public_url,
+            submitted_by=provider_id,
+            attempt_number=attempt_number,
+            status="pending",
+        )
+        db.add(proof)
+
+        booking.status = "pending_confirmation"
+
+        chat_message = ChatMessage(
+            booking_id=booking_id,
+            sender_id=provider_id,
+            message="📸 Provider submitted proof of completion. Please review and confirm.",
+            attachment_url=public_url,
+        )
+        db.add(chat_message)
+
+        create_notification(
+            db,
+            user_id=booking.resident_id,
+            title="Proof of Completion Submitted",
+            message=f"Your provider submitted a photo showing the {booking.service_name} job is done. Please review and confirm.",
+            notif_type="completion_proof_submitted",
+            booking_id=booking.id,
+        )
+
+        db.commit()
+        db.refresh(proof)
+
+        return {
+            "status": "success",
+            "proof": {
+                "id": proof.id,
+                "booking_id": proof.booking_id,
+                "photo_url": proof.photo_url,
+                "attempt_number": proof.attempt_number,
+                "status": proof.status,
+                "submitted_at": str(proof.submitted_at) if proof.submitted_at else None,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/bookings/{booking_id}/completion-proofs")
+def get_completion_proofs(booking_id: int):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+
+        proofs = (
+            db.query(CompletionProof)
+            .filter(CompletionProof.booking_id == booking_id)
+            .order_by(CompletionProof.attempt_number.asc())
+            .all()
+        )
+
+        return {
+            "status": "success",
+            "needs_admin_review": booking.needs_admin_review or False,
+            "proofs": [
+                {
+                    "id": p.id,
+                    "photo_url": p.photo_url,
+                    "attempt_number": p.attempt_number,
+                    "status": p.status,
+                    "rejection_reason": p.rejection_reason,
+                    "submitted_at": str(p.submitted_at) if p.submitted_at else None,
+                    "reviewed_at": str(p.reviewed_at) if p.reviewed_at else None,
+                }
+                for p in proofs
+            ],
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+
+@app.put("/bookings/{booking_id}/completion-proof/{proof_id}/confirm")
+def confirm_completion_proof(booking_id: int, proof_id: int, resident_id: int = Query(...)):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+        if booking.resident_id != resident_id:
+            return {"status": "error", "message": "You are not the resident for this booking"}
+
+        proof = db.query(CompletionProof).filter(CompletionProof.id == proof_id, CompletionProof.booking_id == booking_id).first()
+        if not proof:
+            return {"status": "error", "message": "Proof not found"}
+        if proof.status != "pending":
+            return {"status": "error", "message": "This proof has already been reviewed"}
+
+        proof.status = "approved"
+        proof.reviewed_at = datetime.utcnow()
+
+        chat_message = ChatMessage(
+            booking_id=booking_id,
+            sender_id=resident_id,
+            message="✅ Resident confirmed the service is complete.",
+        )
+        db.add(chat_message)
+
+        create_notification(
+            db,
+            user_id=booking.provider_id,
+            title="Completion Confirmed",
+            message=f"The resident confirmed your {booking.service_name} job is complete. You may now mark it as completed.",
+            notif_type="completion_confirmed",
+            booking_id=booking.id,
+        )
+
+        db.commit()
+        return {"status": "success", "message": "Proof confirmed"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+
+class RejectCompletionProofRequest(BaseModel):
+    resident_id: int
+    reason: str
+
+
+@app.put("/bookings/{booking_id}/completion-proof/{proof_id}/reject")
+def reject_completion_proof(booking_id: int, proof_id: int, payload: RejectCompletionProofRequest):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+        if booking.resident_id != payload.resident_id:
+            return {"status": "error", "message": "You are not the resident for this booking"}
+
+        reason = (payload.reason or "").strip()
+        if not reason:
+            return {"status": "error", "message": "A rejection reason is required"}
+
+        proof = db.query(CompletionProof).filter(CompletionProof.id == proof_id, CompletionProof.booking_id == booking_id).first()
+        if not proof:
+            return {"status": "error", "message": "Proof not found"}
+        if proof.status != "pending":
+            return {"status": "error", "message": "This proof has already been reviewed"}
+
+        proof.status = "rejected"
+        proof.rejection_reason = reason
+        proof.reviewed_at = datetime.utcnow()
+
+        booking.status = "confirmed"
+
+        rejection_count = (
+            db.query(CompletionProof)
+            .filter(CompletionProof.booking_id == booking_id, CompletionProof.status == "rejected")
+            .count()
+        )
+
+        flagged = rejection_count >= MAX_COMPLETION_REJECTIONS
+        if flagged:
+            booking.needs_admin_review = True
+
+        chat_message = ChatMessage(
+            booking_id=booking_id,
+            sender_id=payload.resident_id,
+            message=f"❌ Resident rejected completion: {reason}",
+        )
+        db.add(chat_message)
+
+        if flagged:
+            create_notification(
+                db,
+                user_id=booking.provider_id,
+                title="Completion Disputed — Admin Review Needed",
+                message=f"The resident has rejected proof of completion {rejection_count} times for {booking.service_name} (Booking #{booking.id}). This booking has been flagged for admin review.",
+                notif_type="completion_flagged",
+                booking_id=booking.id,
+            )
+            admins = db.query(User).filter(User.role == "admin").all()
+            for admin in admins:
+                create_notification(
+                    db,
+                    user_id=admin.id,
+                    title="Booking Flagged for Review",
+                    message=f"Booking #{booking.id} ({booking.service_name}) has had completion proof rejected {rejection_count} times and needs manual review.",
+                    notif_type="completion_flagged",
+                    booking_id=booking.id,
+                )
+        else:
+            create_notification(
+                db,
+                user_id=booking.provider_id,
+                title="Completion Proof Rejected",
+                message=f"The resident rejected your completion proof for {booking.service_name}: \"{reason}\". Please review and resubmit.",
+                notif_type="completion_rejected",
+                booking_id=booking.id,
+            )
+
+        db.commit()
+        return {
+            "status": "success",
+            "message": "Proof rejected",
+            "needs_admin_review": booking.needs_admin_review or False,
+            "rejection_count": rejection_count,
+        }
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
@@ -1558,6 +2267,7 @@ def get_provider_jobs(provider_id: int):
         results = []
         for booking in bookings:
             resident = db.query(User).filter(User.id == booking.resident_id).first()
+            resident_address = get_user_display_address(resident) if resident else None
             results.append({
                 "id": booking.id,
                 "service_name": booking.service_name,
@@ -1567,6 +2277,14 @@ def get_provider_jobs(provider_id: int):
                 "notes": booking.notes,
                 "amount": booking.amount,
                 "resident_name": resident.full_name if resident else "Unknown",
+                "resident_phone": resident.phone if resident else None,
+                "resident_picture": resident.profile_picture if resident else None,
+                "resident_address": resident_address,
+                "resident_lat": resident.lat if resident else None,
+                "resident_lon": resident.lon if resident else None,
+                "payment_status": booking.payment_status or "unpaid",
+                "payment_method": booking.payment_method,
+                "needs_admin_review": booking.needs_admin_review or False,
             })
 
         return {"status": "success", "jobs": results}
@@ -1589,6 +2307,7 @@ def get_provider_requests(provider_id: int):
         results = []
         for booking in bookings:
             resident = db.query(User).filter(User.id == booking.resident_id).first()
+            resident_address = get_user_display_address(resident) if resident else None
             results.append({
                 "id": booking.id,
                 "service_name": booking.service_name,
@@ -1598,6 +2317,10 @@ def get_provider_requests(provider_id: int):
                 "amount": booking.amount,
                 "resident_name": resident.full_name if resident else "Unknown",
                 "resident_phone": resident.phone if resident else None,
+                "resident_picture": resident.profile_picture if resident else None,
+                "resident_address": resident_address,
+                "resident_lat": resident.lat if resident else None,
+                "resident_lon": resident.lon if resident else None,
             })
 
         return {"status": "success", "requests": results}
@@ -1614,6 +2337,9 @@ def accept_provider_request(booking_id: int, payload: AcceptBookingRequest = Non
         if not booking:
             return {"status": "error", "message": "Booking not found"}
 
+        fee = math.ceil((booking.amount or 0) * WALLET_FEE_RATE)
+        if wallet_balance(db, booking.provider_id) < fee:
+            return {"status": "error", "message": f"Insufficient wallet balance. Please top up at least ₱{fee:.2f} to accept this job."}
         booking.status = "confirmed"
         if payload and payload.note:
             booking.acceptance_note = payload.note
@@ -1666,6 +2392,245 @@ def decline_provider_request(booking_id: int):
     finally:
         db.close()
 
+@app.get("/bookings/{booking_id}/messages")
+def get_booking_messages(booking_id: int):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+
+        messages = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.booking_id == booking_id)
+            .order_by(ChatMessage.created_at.asc())
+            .all()
+        )
+
+        result = []
+        for msg in messages:
+            sender = db.query(User).filter(User.id == msg.sender_id).first()
+            result.append({
+                "id": msg.id,
+                "booking_id": msg.booking_id,
+                "sender_id": msg.sender_id,
+                "sender_name": sender.full_name if sender else "Unknown",
+                "sender_role": sender.role if sender else None,
+                "message": msg.message,
+                "attachment_url": msg.attachment_url,
+                "is_read": bool(msg.is_read),
+                "created_at": str(msg.created_at),
+            })
+
+        return {"status": "success", "messages": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.put("/bookings/{booking_id}/messages/read")
+def mark_booking_messages_read(booking_id: int, user_id: int):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+        if user_id not in {booking.resident_id, booking.provider_id}:
+            return {"status": "error", "message": "You are not part of this booking"}
+
+        db.query(ChatMessage).filter(
+            ChatMessage.booking_id == booking_id,
+            ChatMessage.sender_id != user_id,
+            ChatMessage.is_read == False,
+        ).update({ChatMessage.is_read: True}, synchronize_session=False)
+        db.commit()
+        return {"status": "success"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.post("/bookings/{booking_id}/messages")
+def send_booking_message(booking_id: int, payload: SendBookingMessageRequest):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+
+        if payload.sender_id not in {booking.resident_id, booking.provider_id}:
+            return {"status": "error", "message": "You are not part of this booking"}
+
+        text = (payload.message or "").strip()
+        attachment_url = (payload.attachment_url or "").strip() or None
+        if not text and not attachment_url:
+            return {"status": "error", "message": "Message cannot be empty"}
+
+        sender = db.query(User).filter(User.id == payload.sender_id).first()
+        new_message = ChatMessage(
+            booking_id=booking_id,
+            sender_id=payload.sender_id,
+            message=text,
+            attachment_url=attachment_url,
+        )
+        db.add(new_message)
+        db.flush()
+
+        recipient_id = booking.provider_id if payload.sender_id == booking.resident_id else booking.resident_id
+        notif_text = "sent you a photo" if attachment_url and not text else "sent you a message"
+        create_notification(
+            db,
+            user_id=recipient_id,
+            title="New Message",
+            message=f"{sender.full_name if sender else 'Someone'} {notif_text} about {booking.service_name}.",
+            notif_type="chat_message",
+            booking_id=booking.id,
+        )
+
+        BOOKING_TYPING_STATUS.pop((booking_id, payload.sender_id), None)
+        db.commit()
+        db.refresh(new_message)
+
+        return {
+            "status": "success",
+            "message": {
+                "id": new_message.id,
+                "booking_id": new_message.booking_id,
+                "sender_id": new_message.sender_id,
+                "sender_name": sender.full_name if sender else "Unknown",
+                "sender_role": sender.role if sender else None,
+                "message": new_message.message,
+                "attachment_url": new_message.attachment_url,
+                "is_read": bool(new_message.is_read),
+                "created_at": str(new_message.created_at),
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.post("/bookings/{booking_id}/attachments")
+async def upload_chat_attachment(booking_id: int, sender_id: int = Form(...), file: UploadFile = File(...)):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+
+        if sender_id not in {booking.resident_id, booking.provider_id}:
+            return {"status": "error", "message": "You are not part of this booking"}
+
+        content_type = file.content_type or ""
+        if content_type not in ALLOWED_IMAGE_MIME:
+            return {"status": "error", "message": "Only JPEG, PNG, or WEBP images are allowed"}
+
+        contents = await file.read()
+        if len(contents) > MAX_PROFILE_PIC_BYTES:
+            return {"status": "error", "message": "Image too large. Max 3 MB."}
+
+        import uuid
+        ext = content_type.split("/")[-1]
+        filename = f"{uuid.uuid4().hex}.{ext}"
+        file_path = os.path.join(CHAT_ATTACHMENT_DIR, filename)
+        with open(file_path, "wb") as f:
+            f.write(contents)
+
+        public_url = f"/uploads/chat_attachments/{filename}"
+
+        sender = db.query(User).filter(User.id == sender_id).first()
+        new_message = ChatMessage(
+            booking_id=booking_id,
+            sender_id=sender_id,
+            message="",
+            attachment_url=public_url,
+        )
+        db.add(new_message)
+        db.flush()
+
+        recipient_id = booking.provider_id if sender_id == booking.resident_id else booking.resident_id
+        create_notification(
+            db,
+            user_id=recipient_id,
+            title="New Message",
+            message=f"{sender.full_name if sender else 'Someone'} sent you a photo about {booking.service_name}.",
+            notif_type="chat_message",
+            booking_id=booking.id,
+        )
+
+        BOOKING_TYPING_STATUS.pop((booking_id, sender_id), None)
+        db.commit()
+        db.refresh(new_message)
+
+        return {
+            "status": "success",
+            "message": {
+                "id": new_message.id,
+                "booking_id": new_message.booking_id,
+                "sender_id": new_message.sender_id,
+                "sender_name": sender.full_name if sender else "Unknown",
+                "sender_role": sender.role if sender else None,
+                "message": new_message.message,
+                "attachment_url": new_message.attachment_url,
+                "is_read": bool(new_message.is_read),
+                "created_at": str(new_message.created_at),
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.post("/bookings/{booking_id}/typing")
+def set_booking_typing_status(booking_id: int, payload: SetTypingStatusRequest):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking:
+            return {"status": "error", "message": "Booking not found"}
+        if payload.sender_id not in {booking.resident_id, booking.provider_id}:
+            return {"status": "error", "message": "You are not part of this booking"}
+
+        sender = db.query(User).filter(User.id == payload.sender_id).first()
+        status = {
+            "sender_id": payload.sender_id,
+            "sender_name": sender.full_name if sender else "Unknown",
+            "is_typing": bool(payload.is_typing),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        if payload.is_typing:
+            BOOKING_TYPING_STATUS[(booking_id, payload.sender_id)] = status
+        else:
+            BOOKING_TYPING_STATUS.pop((booking_id, payload.sender_id), None)
+
+        return {"status": "success", "typing": status}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+@app.get("/bookings/{booking_id}/typing")
+def get_booking_typing_status(booking_id: int, user_id: int | None = None):
+    try:
+        active = []
+        for (booking, sender_id), info in BOOKING_TYPING_STATUS.items():
+            if booking != booking_id:
+                continue
+            if user_id is not None and sender_id == user_id:
+                continue
+            if info.get("is_typing"):
+                active.append({
+                    "sender_id": sender_id,
+                    "sender_name": info.get("sender_name"),
+                    "updated_at": info.get("updated_at"),
+                })
+        return {"status": "success", "typing": active}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 # ── FIX #4: added payment_status and cancel_reason to response ────────────────
 @app.get("/resident/bookings/{resident_id}")
 def get_resident_bookings(resident_id: int):
@@ -1690,10 +2655,13 @@ def get_resident_bookings(resident_id: int):
                 "amount": booking.amount,
                 "provider_id": booking.provider_id,
                 "provider_name": provider.full_name if provider else "Unknown",
+                "provider_picture": provider.profile_picture if provider else None,
                 "created_at": str(booking.created_at) if booking.created_at else "-",
                 "acceptance_note": booking.acceptance_note or None,
                 "cancel_reason": booking.cancel_reason or None,        # FIX #4
                 "payment_status": booking.payment_status or "unpaid",  # FIX #4
+                "payment_method": booking.payment_method,
+                "needs_admin_review": booking.needs_admin_review or False,
             })
 
         return {"status": "success", "bookings": results}
@@ -1813,6 +2781,8 @@ def get_admin_providers(search: str = Query(default=""), status: str = Query(def
                     "address": user.address,
                     "role": user.role,
                     "verification_status": user.verification_status,
+                    "credential_types": json.loads(user.credential_types or "[]"),
+                    "enhanced_verification_status": user.enhanced_verification_status,
                 }
                 for user in providers
             ],
@@ -2163,6 +3133,21 @@ def signup(payload: SignupRequest):
         if password_error:
             return {"status": "error", "message": password_error}
 
+        region_name = (payload.region or "").strip().lower()
+        if not region_name or not (
+            "metro manila" in region_name
+            or "ncr" in region_name
+            or "national capital region" in region_name
+        ):
+            return {
+                "status": "error",
+                "message": "We currently only support signups from Metro Manila.",
+            }
+
+        if payload.role == "pro":
+            credentials = set(payload.credential_types)
+            if "government_id" not in credentials or not credentials.intersection({"experience_declaration", "portfolio", "skill_assessment"}):
+                return {"status": "error", "message": "Providers need a valid Government ID plus at least one experience credential."}
         verification_status = "pending" if payload.role == "pro" else "approved"
         email_verification_token = generate_token()
 
@@ -2170,7 +3155,13 @@ def signup(payload: SignupRequest):
             full_name=payload.full_name, first_name=payload.first_name,
             middle_name=payload.middle_name, last_name=payload.last_name,
             email=payload.email, password=payload.password, role=payload.role,
-            phone=payload.phone, address=payload.address, region=payload.region,
+            phone=payload.phone, phone_verified=payload.phone_verified,
+            credential_types=json.dumps(payload.credential_types),
+            experience_years=payload.experience_years,
+            experience_description=payload.experience_description,
+            skill_assessment_requested=payload.skill_assessment_requested,
+            enhanced_verification_status="pending" if "tesda_license" in payload.credential_types else None,
+            address=payload.address, region=payload.region,
             province=payload.province, city=payload.city, barangay=payload.barangay,
             street=payload.street, verification_status=verification_status,
             is_email_verified=False, email_verification_token=email_verification_token,
@@ -2224,12 +3215,12 @@ def login(payload: LoginRequest):
     try:
         user = (
             db.query(User)
-            .filter(User.email == payload.email, User.password == payload.password)
+            .filter((User.email == payload.identifier) | (User.phone == payload.identifier), User.password == payload.password)
             .first()
         )
 
         if not user:
-            return {"status": "error", "message": "Invalid email or password"}
+            return {"status": "error", "message": "Invalid email/phone or password"}
 
         if user.role != "admin" and not user.is_email_verified:
             return {"status": "error", "message": "Please verify your email before logging in."}

@@ -162,7 +162,31 @@ export default function AdminUsers() {
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto">
+            <div className="space-y-3 md:hidden">
+              {paged.map(user => (
+                <div key={user.id} className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm ${user.is_archived ? "opacity-60" : ""}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-slate-900">{user.full_name}</p>
+                      <p className="mt-1 break-all text-xs text-slate-500">{user.email}</p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">{user.role}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                    <div><p className="text-slate-400">Phone</p><p className="mt-1 font-medium text-slate-700">{user.phone || "-"}</p></div>
+                    <div><p className="text-slate-400">Joined</p><p className="mt-1 font-medium text-slate-700">{formatDate(user.created_at)}</p></div>
+                    <div className="col-span-2"><p className="text-slate-400">Address</p><p className="mt-1 break-words font-medium text-slate-700">{user.address || "-"}</p></div>
+                  </div>
+                  {user.role !== "admin" && (
+                    <button onClick={() => handleArchive(user.id, user.is_archived)} disabled={actionLoading === user.id}
+                      className={`mt-4 w-full px-3 py-2 text-xs font-semibold disabled:opacity-50 ${user.is_archived ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-700"}`}>
+                      {actionLoading === user.id ? "..." : user.is_archived ? "Unarchive" : "Archive"}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[1050px] text-left">
                 <thead>
                   <tr className="border-b border-slate-100 text-sm text-slate-500">

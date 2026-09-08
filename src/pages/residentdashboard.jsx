@@ -14,12 +14,20 @@ const STATUS_COLORS = {
 };
 
 const badgeCls = (status) => {
-  const base = "inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold";
-  if (status === "Confirmed") return `${base} bg-emerald-100 text-emerald-700`;
-  if (status === "Pending")   return `${base} bg-amber-100 text-amber-700`;
-  if (status === "Cancelled") return `${base} bg-rose-100 text-rose-700`;
-  if (status === "Completed") return `${base} bg-blue-100 text-blue-700`;
+  const base = "inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap";
+  const s = (status || "").toLowerCase();
+  if (s === "confirmed") return `${base} bg-emerald-100 text-emerald-700`;
+  if (s === "pending")   return `${base} bg-amber-100 text-amber-700`;
+  if (s === "pending_confirmation") return `${base} bg-purple-100 text-purple-700`;
+  if (s === "cancelled") return `${base} bg-rose-100 text-rose-700`;
+  if (s === "completed") return `${base} bg-blue-100 text-blue-700`;
   return `${base} bg-slate-100 text-slate-700`;
+};
+
+const statusLabel = (status) => {
+  if (!status) return "—";
+  if (status.toLowerCase() === "pending_confirmation") return "Awaiting Confirmation";
+  return status.charAt(0).toUpperCase() + status.slice(1);
 };
 
 function CustomTooltip({ active, payload }) {
@@ -35,14 +43,15 @@ function CustomTooltip({ active, payload }) {
 }
 
 function StatCard({ label, value, hint, icon }) {
+  const tone = label === "Cancelled Bookings" ? "bg-[#F7E4DD]" : label === "Active Bookings" ? "bg-[#FBEACB]" : "bg-[#EFF6F4]";
   return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-50">
+    <div className="prototype-card flex flex-col gap-2.5 p-4 sm:p-5">
+      <div className={`flex h-[38px] w-[38px] items-center justify-center rounded-[11px] ${tone}`}>
         {icon}
       </div>
-      <div className="mt-4 text-2xl font-extrabold text-slate-900">{value}</div>
-      <div className="mt-1 text-sm font-semibold text-slate-700">{label}</div>
-      {hint && <div className="mt-0.5 text-xs text-slate-400">{hint}</div>}
+      <div className="font-display text-2xl font-bold text-[#1E2622]">{value}</div>
+      <div className="text-[13px] font-semibold text-[#1E2622]">{label}</div>
+      {hint && <div className="-mt-1 text-[11.5px] text-[#707B72]">{hint}</div>}
     </div>
   );
 }
@@ -121,15 +130,7 @@ export default function ResidentDashboard() {
   };
 
   return (
-    <ResidentLayout
-      title="Dashboard"
-      topRight={
-        <a href="/resident/find"
-          className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 transition">
-          Find a Service
-        </a>
-      }
-    >
+    <ResidentLayout title="Dashboard">
       <div className="space-y-6">
         {errorMessage && (
           <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-red-700 text-sm">
@@ -137,8 +138,45 @@ export default function ResidentDashboard() {
           </div>
         )}
 
+        {/* Greeting Hero */}
+        <section className="relative overflow-hidden rounded-[22px] bg-gradient-to-r from-[#0F6B5C] via-[#12806E] to-[#1A9884] p-5 text-white shadow-sm sm:p-7">
+          <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/10" />
+          <div className="absolute -bottom-8 right-16 h-24 w-24 rounded-full bg-white/10" />
+          <p className="relative text-xs font-semibold text-[#FBEACB]">MAY KAILANGAN KA BA?</p>
+          <h1 className="relative mt-1 max-w-[360px] font-display text-xl font-bold leading-tight sm:text-[22px]">
+            Find a trusted service provider near you today
+          </h1>
+          <div className="relative mt-4 flex max-w-[340px] items-center gap-2 rounded-[13px] border border-white/30 bg-white/15 p-2.5">
+            <span className="text-white/80">⌕</span>
+            <input
+              aria-label="Search for a service"
+              placeholder="Try 'aircon cleaning' or 'plumber'"
+              className="min-w-0 flex-1 border-0 bg-transparent text-[13px] text-white outline-none placeholder:text-white/70"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  window.location.href = `/resident/find?search=${encodeURIComponent(event.currentTarget.value)}`;
+                }
+              }}
+            />
+            <a href="/resident/find" className="rounded-[9px] bg-[#E8A33D] px-3.5 py-2 text-xs font-bold text-[#101C34] hover:bg-[#D18F26]">Search</a>
+          </div>
+        </section>
+
+        <section className="flex gap-2.5 overflow-x-auto py-1 scrollbar-hide">
+          {["Plumbing", "Electrical", "Cleaning", "Aircon", "Carpentry", "Gardening"].map((category) => (
+            <a key={category} href={`/resident/find?search=${encodeURIComponent(category)}`} className="flex w-[78px] shrink-0 flex-col items-center gap-2">
+              <span className="prototype-card flex h-[54px] w-[54px] items-center justify-center rounded-2xl text-xl text-[#0F6B5C]">{category === "Plumbing" ? "⌁" : category === "Electrical" ? "ϟ" : category === "Cleaning" ? "⌕" : category === "Aircon" ? "✳" : category === "Carpentry" ? "⌁" : "◒"}</span>
+              <span className="text-center text-[11.5px] font-semibold leading-tight text-[#3C463F]">{category}</span>
+            </a>
+          ))}
+        </section>
+
+        <div className="flex items-center justify-between pt-1">
+          <h2 className="font-display text-base font-bold text-[#1E2622]">Your bookings, at a glance</h2>
+        </div>
+
         {/* Stat Cards */}
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {loading ? (
             Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm animate-pulse">
@@ -156,11 +194,12 @@ export default function ResidentDashboard() {
           )}
         </section>
 
+
         {/* Chart + Bookings */}
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
 
           {/* Booking Status Chart */}
-          <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+          <div className="prototype-card p-5">
             <h2 className="text-lg font-bold text-slate-900 mb-1">Booking Breakdown</h2>
             <p className="text-sm text-slate-500 mb-4">Distribution of your booking statuses</p>
 
@@ -202,7 +241,7 @@ export default function ResidentDashboard() {
           </div>
 
           {/* Latest Bookings */}
-          <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm xl:col-span-2">
+          <div className="prototype-card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Recent Bookings</h2>
@@ -221,30 +260,47 @@ export default function ResidentDashboard() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-100 text-left text-xs text-slate-400 uppercase tracking-wide">
-                      <th className="pb-3 font-semibold">Service</th>
-                      <th className="pb-3 font-semibold">Provider</th>
-                      <th className="pb-3 font-semibold">Date</th>
-                      <th className="pb-3 font-semibold">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {latestBookings.map((b) => (
-                      <tr key={b.id} className="border-t border-slate-50">
-                        <td className="py-3 font-semibold text-slate-900">{b.service}</td>
-                        <td className="py-3 text-slate-600">{b.pro}</td>
-                        <td className="py-3 text-slate-500 text-xs">{b.date}</td>
-                        <td className="py-3">
-                          <span className={badgeCls(b.status)}>{b.status}</span>
-                        </td>
+              <>
+                {/* Mobile: stacked cards */}
+                <div className="space-y-3 sm:hidden">
+                  {latestBookings.map((b) => (
+                    <div key={b.id} className="rounded-xl border border-slate-100 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-semibold text-slate-900 text-sm">{b.service}</p>
+                        <span className={badgeCls(b.status)}>{statusLabel(b.status)}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">{b.pro}</p>
+                      <p className="mt-0.5 text-xs text-slate-400">{b.date}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Desktop/tablet: table */}
+                <div className="hidden overflow-x-auto sm:block">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 text-left text-xs text-slate-400 uppercase tracking-wide">
+                        <th className="pb-3 font-semibold">Service</th>
+                        <th className="pb-3 font-semibold">Provider</th>
+                        <th className="pb-3 font-semibold">Date</th>
+                        <th className="pb-3 font-semibold">Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {latestBookings.map((b) => (
+                        <tr key={b.id} className="border-t border-slate-50">
+                          <td className="py-3 font-semibold text-slate-900">{b.service}</td>
+                          <td className="py-3 text-slate-600">{b.pro}</td>
+                          <td className="py-3 text-slate-500 text-xs">{b.date}</td>
+                          <td className="py-3">
+                            <span className={badgeCls(b.status)}>{statusLabel(b.status)}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         </section>

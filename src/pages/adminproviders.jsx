@@ -11,6 +11,18 @@ const DOC_TYPE_LABELS = {
   other: "Other Document",
 };
 
+function CredentialTags({ provider }) {
+  const types = provider.credential_types || [];
+  const tags = [
+    ["government_id", "ID"],
+    ["experience_declaration", "Experience"],
+    ["portfolio", "Portfolio"],
+    ["skill_assessment", "Skill Assessment"],
+    ["tesda_license", "TESDA"],
+  ];
+  return <div className="mt-2 flex flex-wrap gap-1.5">{tags.map(([key, label]) => <span key={key} className={`rounded-full px-2 py-1 text-[10px] font-semibold ${types.includes(key) ? "bg-teal-50 text-teal-700" : "bg-slate-100 text-slate-400"}`}>{label} {types.includes(key) ? "✓" : "—"}</span>)}{provider.enhanced_verification_status === "pending" && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">Enhanced Verification Pending</span>}</div>;
+}
+
 function Pagination({ total, page, perPage, onPage }) {
   const totalPages = Math.ceil(total / perPage);
   if (totalPages <= 1) return null;
@@ -168,7 +180,31 @@ export default function AdminProviders() {
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto">
+            <div className="space-y-3 md:hidden">
+              {paged.map((provider) => (
+                <div key={provider.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-slate-900">{provider.full_name}</p>
+                      <p className="mt-1 break-all text-xs text-slate-500">{provider.email}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusBadge(provider.verification_status)}`}>{provider.verification_status || "unknown"}</span>
+                  </div>
+                  <CredentialTags provider={provider} />
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                    <div><p className="text-slate-400">Phone</p><p className="mt-1 font-medium text-slate-700">{provider.phone || "—"}</p></div>
+                    <div><p className="text-slate-400">Role</p><p className="mt-1 font-medium text-slate-700">{provider.role}</p></div>
+                    <div className="col-span-2"><p className="text-slate-400">Address</p><p className="mt-1 break-words font-medium text-slate-700">{provider.address || "—"}</p></div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button onClick={() => openCredentials(provider)} className="flex-1 border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">Credentials</button>
+                    {provider.verification_status !== "approved" && <button onClick={() => updateStatus(provider.id, "approve")} className="flex-1 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">Approve</button>}
+                    {provider.verification_status !== "rejected" && <button onClick={() => updateStatus(provider.id, "reject")} className="flex-1 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">Reject</button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[1100px] text-left">
                 <thead>
                   <tr className="border-b border-slate-100 text-sm text-slate-500">
@@ -197,6 +233,7 @@ export default function AdminProviders() {
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadge(provider.verification_status)}`}>
                           {provider.verification_status || "unknown"}
                         </span>
+                        <CredentialTags provider={provider} />
                       </td>
                       <td className="py-4">
                         <div className="flex flex-wrap gap-2">

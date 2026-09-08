@@ -2,23 +2,16 @@ import React from "react";
 
 export default function AuthSplitLayout({ leftTitle, leftSubtitle, children }) {
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-white via-slate-50 to-teal-50">
+    <div className="min-h-screen w-full bg-[#FAF6EE]">
       <div className="grid min-h-screen w-full lg:grid-cols-2">
         {/* Left side branding panel */}
-        <div className="relative hidden min-h-screen overflow-hidden lg:block">
-          <img
-            className="absolute inset-0 h-full w-full object-cover"
-            src="https://images.unsplash.com/photo-1544986581-efac024faf62?q=80&w=1600&auto=format&fit=crop"
-            alt="Metro Manila"
-          />
-          <div className="absolute inset-0 bg-teal-900/80" />
-          <div className="absolute inset-0 bg-gradient-to-br from-teal-900/85 via-teal-800/75 to-slate-900/80" />
-
+        <div className="relative hidden min-h-screen overflow-hidden bg-gradient-to-br from-[#0F6B5C] to-[#14213D] lg:block">
           <div className="relative flex h-full min-h-screen flex-col justify-between p-12 xl:p-16">
-            <div>
-              <div className="inline-flex rounded-full border border-white/20 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/85 backdrop-blur">
-                SerbisyoNear
-              </div>
+          <div>
+            <div className="inline-flex items-center gap-3 text-white">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F5A623] font-display text-lg font-extrabold text-[#14213D]">S</span>
+              <span className="font-display text-xl font-bold">SerbisyoNear</span>
+            </div>
 
               <div className="mt-10 max-w-xl text-white">
                 <h1 className="text-5xl font-extrabold leading-tight">
@@ -58,7 +51,7 @@ export default function AuthSplitLayout({ leftTitle, leftSubtitle, children }) {
         {/* Right side form area */}
         <div className="flex min-h-screen items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
           <div className="w-full max-w-xl">
-            <div className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-xl sm:p-8 lg:p-10">
+            <div className="rounded-[2rem] border border-[#E9E2D2] bg-white p-6 shadow-xl sm:p-8 lg:p-10">
               {children}
             </div>
           </div>

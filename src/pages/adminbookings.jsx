@@ -42,6 +42,7 @@ export default function AdminBookings() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showArchived, setShowArchived] = useState(false);
+  const [selectedBookingId, setSelectedBookingId] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   const [page, setPage] = useState(1);
 
@@ -178,63 +179,122 @@ export default function AdminBookings() {
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1300px] text-left">
-                <thead>
-                  <tr className="border-b border-slate-100 text-sm text-slate-500">
-                    <th className="pb-3 font-semibold">ID</th>
-                    <th className="pb-3 font-semibold">Service</th>
-                    <th className="pb-3 font-semibold">Resident</th>
-                    <th className="pb-3 font-semibold">Provider</th>
-                    <th className="pb-3 font-semibold">Booking Date</th>
-                    <th className="pb-3 font-semibold">Created At</th>
-                    <th className="pb-3 font-semibold">Amount</th>
-                    <th className="pb-3 font-semibold">Status</th>
-                    <th className="pb-3 font-semibold">Payment</th>
-                    <th className="pb-3 font-semibold">Notes</th>
-                    <th className="pb-3 font-semibold">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paged.map(booking => (
-                    <tr key={booking.id} className={`border-b border-slate-50 ${booking.is_archived?"opacity-60":""}`}>
-                      <td className="py-4 text-slate-700">{booking.id}</td>
-                      <td className="py-4 font-medium text-slate-900">{booking.service_name}</td>
-                      <td className="py-4 text-slate-600">{booking.resident_name}</td>
-                      <td className="py-4 text-slate-600">{booking.provider_name}</td>
-                      <td className="py-4 text-slate-600">{booking.booking_date}</td>
-                      <td className="py-4 text-xs text-slate-400">{formatDate(booking.created_at)}</td>
-                      <td className="py-4 font-semibold text-emerald-700">₱{booking.amount||0}</td>
-                      <td className="py-4">
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadge(booking.status)}`}>
-                          {booking.status}
+            <div className="space-y-3">
+              {paged.map(booking => {
+                const isSelected = selectedBookingId === booking.id;
+                return (
+                  <button
+                    key={booking.id}
+                    type="button"
+                    onClick={() => setSelectedBookingId(booking.id)}
+                    className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
+                      isSelected
+                        ? "border-teal-200 bg-teal-50 shadow-sm"
+                        : "border-slate-200 bg-slate-50 hover:border-teal-200 hover:bg-white"
+                    }`}
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-base font-bold text-slate-900">#{booking.id} • {booking.service_name}</h3>
+                          <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getStatusBadge(booking.status)}`}>
+                            {booking.status}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+                          <span><span className="font-medium text-slate-500">Resident:</span> {booking.resident_name || "—"}</span>
+                          <span><span className="font-medium text-slate-500">Provider:</span> {booking.provider_name || "—"}</span>
+                          <span><span className="font-medium text-slate-500">Date:</span> {booking.booking_date || "—"}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-xs uppercase tracking-wide text-slate-400">Amount</p>
+                          <p className="text-lg font-extrabold text-emerald-700">₱{booking.amount || 0}</p>
+                        </div>
+                        <span aria-label="View booking details" className="rounded-full bg-slate-200 px-3 py-1.5 text-[10px] font-semibold uppercase text-slate-600">View details</span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {(() => {
+              const selectedBooking = filtered.find((booking) => booking.id === selectedBookingId) || null;
+              if (!selectedBooking) return null;
+
+              return (
+                <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Booking details</p>
+                      <h3 className="mt-1 text-xl font-extrabold text-slate-900">#{selectedBooking.id} • {selectedBooking.service_name}</h3>
+                    </div>
+                    <button type="button" onClick={() => setSelectedBookingId(null)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-white">
+                      Close
+                    </button>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="rounded-2xl bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Resident</p>
+                      <p className="mt-2 font-semibold text-slate-800">{selectedBooking.resident_name || "—"}</p>
+                    </div>
+                    <div className="rounded-2xl bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Provider</p>
+                      <p className="mt-2 font-semibold text-slate-800">{selectedBooking.provider_name || "—"}</p>
+                    </div>
+                    <div className="rounded-2xl bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Booking Date</p>
+                      <p className="mt-2 font-semibold text-slate-800">{selectedBooking.booking_date || "—"}</p>
+                    </div>
+                    <div className="rounded-2xl bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Created At</p>
+                      <p className="mt-2 font-semibold text-slate-800">{formatDate(selectedBooking.created_at)}</p>
+                    </div>
+                    <div className="rounded-2xl bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Status</p>
+                      <div className="mt-2">
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadge(selectedBooking.status)}`}>
+                          {selectedBooking.status}
                         </span>
-                      </td>
-                      <td className="py-4">
-                        {booking.status === "completed" ? (
-                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getPaymentBadge(booking.payment_status)}`}>
-                            {booking.payment_status === "paid"    && "Paid"}
-                            {booking.payment_status === "pending" && "Pending"}
-                            {(!booking.payment_status || booking.payment_status === "unpaid") && "Unpaid"}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Payment</p>
+                      <div className="mt-2">
+                        {selectedBooking.status === "completed" ? (
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getPaymentBadge(selectedBooking.payment_status)}`}>
+                            {selectedBooking.payment_status === "paid" && "Paid"}
+                            {selectedBooking.payment_status === "pending" && "Pending"}
+                            {(!selectedBooking.payment_status || selectedBooking.payment_status === "unpaid") && "Unpaid"}
                           </span>
                         ) : (
-                          <span className="text-xs text-slate-300">—</span>
+                          <span className="text-sm text-slate-300">—</span>
                         )}
-                      </td>
-                      <td className="py-4 text-slate-600 max-w-[140px] truncate">{booking.notes||"-"}</td>
-                      <td className="py-4">
-                        <button onClick={() => handleArchive(booking.id, booking.is_archived)}
-                          disabled={actionLoading===booking.id}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-50 ${
-                            booking.is_archived?"bg-slate-100 text-slate-600 hover:bg-slate-200":"bg-amber-50 text-amber-600 hover:bg-amber-100"}`}>
-                          {actionLoading===booking.id?"...":booking.is_archived?"Unarchive":"Archive"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-2xl bg-white p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Notes</p>
+                    <p className="mt-2 text-sm text-slate-700">{selectedBooking.notes || "No notes provided."}</p>
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <button onClick={() => handleArchive(selectedBooking.id, selectedBooking.is_archived)}
+                      disabled={actionLoading===selectedBooking.id}
+                      className={`rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 ${
+                        selectedBooking.is_archived ? "bg-slate-100 text-slate-600 hover:bg-slate-200" : "bg-amber-50 text-amber-600 hover:bg-amber-100"
+                      }`}>
+                      {actionLoading===selectedBooking.id ? "..." : selectedBooking.is_archived ? "Unarchive" : "Archive"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
             <Pagination total={filtered.length} page={page} perPage={PER_PAGE} onPage={setPage} />
           </>
         )}

@@ -6,7 +6,7 @@ import { API_BASE_URL } from "../lib/api";
 
 export default function Login() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -24,14 +24,16 @@ export default function Login() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          email,
+          identifier,
+          // Keep the legacy field while older local backends are still running.
+          email: identifier,
           password,
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (data.status === "success") {
+      if (res.ok && data.status === "success") {
         localStorage.setItem("user", JSON.stringify(data.user));
 
         if (data.user.role === "resident") {
@@ -44,7 +46,7 @@ export default function Login() {
           navigate("/");
         }
       } else {
-        setErrorMessage(data.message || "Login failed.");
+        setErrorMessage(data.message || `Login failed (${res.status}).`);
       }
     } catch (error) {
       console.error(error);
@@ -72,13 +74,13 @@ export default function Login() {
 
       <form onSubmit={onSubmit} className="mt-8 space-y-5">
         <div>
-          <label className="text-sm font-semibold text-slate-700">Email</label>
+          <label className="text-sm font-semibold text-slate-700">Email or phone number</label>
           <input
             className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 transition focus:outline-none focus:ring-2 focus:ring-teal-600"
-            placeholder="juan@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            type="email"
+            placeholder="juan@example.com or 09XXXXXXXXX"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
+            type="text"
             required
           />
         </div>

@@ -220,6 +220,10 @@ export default function ProProfile() {
         const selectedData = await selectedRes.json();
 
         if (profileData.status === "success") {
+          const storedUser = JSON.parse(localStorage.getItem("user") || "null");
+          const syncedUser = { ...storedUser, ...profileData.user };
+          localStorage.setItem("user", JSON.stringify(syncedUser));
+          window.dispatchEvent(new CustomEvent("serbisyonear-user-updated", { detail: syncedUser }));
           setForm({
             full_name: profileData.user.full_name || "",
             email: profileData.user.email || "",
@@ -272,7 +276,9 @@ export default function ProProfile() {
       if (data.status === "success") {
         setForm((prev) => ({ ...prev, profile_picture: data.profile_picture }));
         // Persist in localStorage so navbar picks it up immediately
-        localStorage.setItem("user", JSON.stringify({ ...user, profile_picture: data.profile_picture }));
+        const syncedUser = { ...user, profile_picture: data.profile_picture };
+        localStorage.setItem("user", JSON.stringify(syncedUser));
+        window.dispatchEvent(new CustomEvent("serbisyonear-user-updated", { detail: syncedUser }));
         setSuccessMessage("Profile picture updated!");
       } else {
         setErrorMessage(data.message || "Failed to upload photo.");
@@ -491,7 +497,7 @@ export default function ProProfile() {
               </div>
 
               {/* Change Password */}
-              <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+              <div className="hidden">
                 <button
                   onClick={() => { setShowPwSection(v => !v); setPwError(""); setPwSuccess(""); }}
                   className="flex w-full items-center justify-between text-left">

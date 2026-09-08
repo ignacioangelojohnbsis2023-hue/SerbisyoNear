@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import ResidentLayout from "../components/ResidentLayout";
+import ChatModal from "../components/ChatModal";
 import { API_BASE_URL } from "../lib/api";
 
 const PER_PAGE = 8;
+const formatBookingId = (id) => `BK-${String(id).padStart(6, "0")}`;
 
 function Pagination({ total, page, perPage, onPage }) {
   const totalPages = Math.ceil(total / perPage);
@@ -61,11 +64,14 @@ const CANCEL_REASONS = [
 ];
 
 export default function ResidentBookings() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [selectedBookingId, setSelectedBookingId] = useState(null);
+  const [chatBooking, setChatBooking] = useState(null);
   const [page, setPage] = useState(1);
 
   // Cancel
@@ -93,7 +99,107 @@ export default function ResidentBookings() {
   // Payment
   const [payingId, setPayingId] = useState(null);
 
-  useEffect(() => { fetchBookings(); }, []);
+  // Completion proof review
+  const [proofs, setProofs] = useState([]);
+  const [loadingProofs, setLoadingProofs] = useState(false);
+  const [rejectProofId, setRejectProofId] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [processingProof, setProcessingProof] = useState(false);
+
+  useEffect(() => {
+    fetchBookings();
+    const interval = setInterval(fetchBookings, 6000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const bookingId = Number(searchParams.get("booking_id"));
+    if (!bookingId) return;
+    const targetBooking = bookings.find((b) => b.id === bookingId);
+    if (targetBooking) {
+      setSelectedBookingId(bookingId);
+      if (searchParams.get("chat") === "1") setChatBooking(targetBooking);
+
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("booking_id");
+      nextParams.delete("chat");
+      if (nextParams.toString() !== searchParams.toString()) {
+        setSearchParams(nextParams, { replace: true });
+      }
+    }
+  }, [bookings, searchParams, setSearchParams]);
+
+  async function loadProofs(bookingId) {
+    if (!bookingId) { setProofs([]); return; }
+    setLoadingProofs(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/bookings/${bookingId}/completion-proofs`);
+      const data = await res.json();
+      if (data.status === "success") setProofs(data.proofs);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingProofs(false);
+    }
+  }
+
+  useEffect(() => {
+    if (selectedBookingId) loadProofs(selectedBookingId);
+    else setProofs([]);
+  }, [selectedBookingId]);
+
+  async function confirmProof(bookingId, proofId) {
+    const user = JSON.parse(localStorage.getItem("user") || "null");
+    if (!user?.id) return;
+    setProcessingProof(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/bookings/${bookingId}/completion-proof/${proofId}/confirm?resident_id=${user.id}`, { method: "PUT" });
+      const data = await res.json();
+      if (data.status === "success") {
+        await loadProofs(bookingId);
+        await fetchBookings();
+      } else {
+        alert(data.message || "Failed to confirm proof.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Something went wrong. Please try again.");
+    } finally {
+      setProcessingProof(false);
+    }
+  }
+
+  function openRejectModal(proofId) {
+    setRejectReason("");
+    setRejectProofId(proofId);
+  }
+  function closeRejectModal() { if (processingProof) return; setRejectProofId(null); }
+
+  async function submitRejectProof(bookingId) {
+    const user = JSON.parse(localStorage.getItem("user") || "null");
+    if (!user?.id || !rejectProofId || !rejectReason.trim()) return;
+    setProcessingProof(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/bookings/${bookingId}/completion-proof/${rejectProofId}/reject`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resident_id: user.id, reason: rejectReason.trim() }),
+      });
+      const data = await res.json();
+      if (data.status === "success") {
+        setRejectProofId(null);
+        await loadProofs(bookingId);
+        await fetchBookings();
+      } else {
+        alert(data.message || "Failed to reject proof.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Something went wrong. Please try again.");
+    } finally {
+      setProcessingProof(false);
+    }
+  }
 
   async function fetchBookings() {
     try {
@@ -117,6 +223,25 @@ export default function ResidentBookings() {
         window.location.href = data.checkout_url;
       } else {
         alert(data.message || "Failed to create payment link.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Something went wrong. Please try again.");
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function handlePayCash(booking) {
+    if (!window.confirm("Select Cash on Hand? Your provider will confirm once payment is received in person.")) return;
+    setPayingId(booking.id);
+    try {
+      const res = await fetch(`${API_BASE_URL}/payment/cash/${booking.id}`, { method: "POST" });
+      const data = await res.json();
+      if (data.status === "success") {
+        await fetchBookings();
+      } else {
+        alert(data.message || "Failed to select cash payment.");
       }
     } catch (e) {
       console.error(e);
@@ -150,20 +275,36 @@ export default function ResidentBookings() {
   function getStatusBadge(status) {
     if (status === "confirmed") return "bg-emerald-100 text-emerald-700";
     if (status === "pending")   return "bg-amber-100 text-amber-700";
+    if (status === "pending_confirmation") return "bg-purple-100 text-purple-700";
     if (status === "cancelled") return "bg-red-100 text-red-700";
     if (status === "completed") return "bg-blue-100 text-blue-700";
     return "bg-slate-100 text-slate-700";
   }
 
+  function getStatusLabel(status) {
+    if (status === "pending_confirmation") return "Awaiting Your Confirmation";
+    if (!status) return "—";
+    return status.charAt(0).toUpperCase() + status.slice(1);
+  }
+
   function getPaymentBadge(ps) {
-    if (ps === "paid")    return "bg-teal-100 text-teal-700";
-    if (ps === "pending") return "bg-amber-100 text-amber-700";
+    if (ps === "paid")        return "bg-teal-100 text-teal-700";
+    if (ps === "pending")     return "bg-amber-100 text-amber-700";
+    if (ps === "cash_pending") return "bg-amber-100 text-amber-700";
     return "bg-slate-100 text-slate-500";
   }
 
-  // ── Show Pay button only on confirmed+unpaid ──────────────
+  function getPaymentLabel(booking) {
+    const ps = booking.payment_status;
+    if (ps === "paid") return "✓ Paid";
+    if (ps === "pending") return "⏳ Pending (GCash)";
+    if (ps === "cash_pending") return "⏳ Awaiting cash confirmation";
+    return "Unpaid";
+  }
+
+  // ── Show Pay options only on confirmed+unpaid ──────────────
   function showPayButton(booking) {
-    return booking.status === "confirmed" && booking.payment_status !== "paid";
+    return booking.status === "confirmed" && !["paid", "pending", "cash_pending"].includes(booking.payment_status);
   }
 
   function openCancelModal(bookingId) {
@@ -281,22 +422,22 @@ export default function ResidentBookings() {
           </div>
         )}
 
-        <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+        <div className="prototype-card p-5 sm:p-6">
           <div className="mb-5">
-            <h2 className="text-2xl font-extrabold text-slate-900">Bookings</h2>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Overview</p>
+            <h2 className="mt-1 text-xl font-extrabold text-slate-900 sm:text-2xl">Recent bookings</h2>
             <p className="mt-2 text-slate-500">Track your booked services and their current status.</p>
           </div>
 
-          {/* Filter tabs */}
           <div className="mb-6 flex flex-wrap gap-2">
             {statusTabs.map((tab) => {
               const count = tab === "all" ? bookings.length : bookings.filter((b) => b.status === tab).length;
               return (
                 <button key={tab} onClick={() => { setStatusFilter(tab); setPage(1); }}
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold capitalize transition ${
-                    statusFilter === tab ? "bg-teal-700 text-white shadow" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
+                  className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                    statusFilter === tab ? "bg-navy-900 text-white shadow" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                   }`}>
-                  {tab} ({count})
+                  {tab === "all" ? "All" : getStatusLabel(tab)} ({count})
                 </button>
               );
             })}
@@ -305,134 +446,290 @@ export default function ResidentBookings() {
           {loading ? (
             <p className="text-slate-500">Loading bookings...</p>
           ) : filteredBookings.length === 0 ? (
-            <p className="text-slate-500">No {statusFilter !== "all" ? statusFilter : ""} bookings found.</p>
+            <p className="text-slate-500">No {statusFilter !== "all" ? getStatusLabel(statusFilter).toLowerCase() + " " : ""}bookings found.</p>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[1350px] text-left">
-                  <thead>
-                    <tr className="border-b border-slate-100 text-sm text-slate-500">
-                      <th className="pb-3 font-semibold">Service</th>
-                      <th className="pb-3 font-semibold">Provider</th>
-                      <th className="pb-3 font-semibold">Booking Date & Time</th>
-                      <th className="pb-3 font-semibold">Created At</th>
-                      <th className="pb-3 font-semibold">Amount</th>
-                      <th className="pb-3 font-semibold">Status</th>
-                      <th className="pb-3 font-semibold">Payment</th>
-                      <th className="pb-3 font-semibold">Notes</th>
-                      <th className="pb-3 font-semibold">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedBookings.map((booking) => (
-                      <tr key={booking.id} className="border-b border-slate-50">
-                        <td className="py-4 font-medium text-slate-900">{booking.service_name}</td>
-                        <td className="py-4 text-slate-600">{booking.provider_name}</td>
-                        <td className="py-4 text-slate-600 whitespace-nowrap">{formatBookingDate(booking.booking_date)}</td>
-                        <td className="py-4 text-xs text-slate-400">{formatDate(booking.created_at)}</td>
-                        <td className="py-4 font-semibold text-emerald-700">₱{booking.amount || 0}</td>
-                        <td className="py-4">
-                          <div className="flex flex-col gap-1">
-                            <span className={`rounded-full px-3 py-1 text-xs font-semibold w-fit ${getStatusBadge(booking.status)}`}>
-                              {booking.status}
+              <div className="space-y-3">
+                {pagedBookings.map((booking) => {
+                  const isSelected = selectedBookingId === booking.id;
+                  return (
+                    <div key={booking.id} className={`rounded-2xl border px-4 py-4 transition ${
+                      isSelected ? "border-teal-200 bg-teal-50 shadow-sm" : "border-slate-200 bg-slate-50 hover:border-teal-200 hover:bg-white"
+                    }`}>
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-base font-bold text-slate-900">{booking.service_name}</h3>
+                            <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getStatusBadge(booking.status)}`}>
+                              {getStatusLabel(booking.status)}
                             </span>
-                            {booking.status === "cancelled" && booking.cancel_reason && (
-                              <span className="text-xs text-slate-400 italic">"{booking.cancel_reason}"</span>
-                            )}
-                            {booking.status === "confirmed" && booking.acceptance_note && (
-                              <div className="mt-1 flex items-start gap-1 rounded-xl bg-teal-50 px-2 py-1.5">
-                                <span className="text-xs">💬</span>
-                                <span className="text-xs text-teal-700 italic">"{booking.acceptance_note}"</span>
-                              </div>
-                            )}
                           </div>
-                        </td>
-
-                        {/* Payment status column — only show for confirmed/completed */}
-                        <td className="py-4">
-                          {["confirmed", "completed"].includes(booking.status) ? (
-                            <span className={`rounded-full px-3 py-1 text-xs font-semibold w-fit ${getPaymentBadge(booking.payment_status)}`}>
-                              {booking.payment_status === "paid"    ? "✓ Paid"
-                              : booking.payment_status === "pending" ? "⏳ Pending"
-                              : "Unpaid"}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-slate-300">—</span>
-                          )}
-                        </td>
-
-                        <td className="py-4 text-slate-600 max-w-[120px] truncate">{booking.notes || "-"}</td>
-                        <td className="py-4">
-                          <div className="flex flex-col gap-2">
-
-                            {/* Cancel — only pending */}
-                            {booking.status === "pending" && (
-                              <button onClick={() => openCancelModal(booking.id)}
-                                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
-                                Cancel
-                              </button>
-                            )}
-
-                            {/* Feedback — only completed */}
-                            {booking.status === "completed" && (
-                              submittedFeedbacks.includes(booking.id) ? (
-                                <span className="rounded-xl bg-slate-100 px-4 py-2 text-center text-sm font-semibold text-slate-400">✓ Feedback Sent</span>
-                              ) : (
-                                <button onClick={() => openFeedbackModal(booking)}
-                                  className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600">
-                                  Feedback
-                                </button>
-                              )
-                            )}
-
-                            {showPayButton(booking) && (
-                              <button
-                                onClick={() => handlePayNow(booking)}
-                                disabled={payingId === booking.id}
-                                className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5"
-                              >
-                                {payingId === booking.id ? (
-                                  <>
-                                    <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                                    </svg>
-                                    Processing...
-                                  </>
-                                ) : (
-                                  <>Pay via GCash</>
-                                )}
-                              </button>
-                            )}
-
-                            {/* Rebook — completed or cancelled */}
-                            {["completed", "cancelled"].includes(booking.status) && (
-                              <button onClick={() => openRebookModal(booking)}
-                                className="rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">
-                                Rebook
-                              </button>
-                            )}
-
-                            {/* Awaiting label — confirmed + already paid */}
-                            {booking.status === "confirmed" && booking.payment_status === "paid" && (
-                              <span className="text-sm text-slate-400">Awaiting completion</span>
-                            )}
+                          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+                            <span><span className="font-medium text-slate-500">Provider:</span> {booking.provider_name || "—"}</span>
+                            <span><span className="font-medium text-slate-500">Date:</span> {formatBookingDate(booking.booking_date)}</span>
+                            <span><span className="font-medium text-slate-500">Amount:</span> ₱{booking.amount || 0}</span>
                           </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p className="text-xs uppercase tracking-wide text-slate-400">Payment</p>
+                            <p className="text-sm font-semibold text-slate-700">
+                              {booking.status === "confirmed" || booking.status === "completed"
+                                ? getPaymentLabel(booking)
+                                : "—"}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedBookingId(booking.id)}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700 hover:border-teal-200 hover:text-teal-700"
+                          >
+                            View details
+                            <span aria-hidden="true">→</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setChatBooking(booking)}
+                            className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-white hover:bg-sky-700"
+                          >
+                            Message
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <Pagination
-                total={filteredBookings.length}
-                page={page}
-                perPage={PER_PAGE}
-                onPage={setPage}
-              />
+
+              <Pagination total={filteredBookings.length} page={page} perPage={PER_PAGE} onPage={setPage} />
             </>
           )}
         </div>
+
+        {(() => {
+          const selectedBooking = filteredBookings.find((booking) => booking.id === selectedBookingId) || null;
+          if (!selectedBooking) return null;
+
+          return (
+            <div className="fixed inset-0 z-50 flex justify-end bg-black/40">
+              <div className="h-full w-full max-w-xl overflow-y-auto bg-white shadow-2xl">
+                <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">Booking details</p>
+                    <h3 className="mt-1 text-xl font-extrabold text-slate-900">{selectedBooking.service_name}</h3>
+                  </div>
+                  <button type="button" onClick={() => setSelectedBookingId(null)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+                    Close
+                  </button>
+                </div>
+
+                <div className="space-y-4 p-5">
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Booking ID</p>
+                    <p className="mt-2 text-lg font-bold text-slate-900">{formatBookingId(selectedBooking.id)}</p>
+                  </div>
+
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Provider</p>
+                    <p className="mt-2 text-lg font-bold text-slate-900">{selectedBooking.provider_name || "—"}</p>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Booking date</p>
+                      <p className="mt-2 text-base font-bold text-slate-900">{formatBookingDate(selectedBooking.booking_date)}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Created</p>
+                      <p className="mt-2 text-base font-bold text-slate-900">{formatDate(selectedBooking.created_at)}</p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Status</p>
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadge(selectedBooking.status)}`}>
+                        {getStatusLabel(selectedBooking.status)}
+                      </span>
+                      <span className="text-sm font-semibold text-emerald-700">₱{selectedBooking.amount || 0}</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Payment</p>
+                    <div className="mt-2">
+                      {selectedBooking.status === "confirmed" || selectedBooking.status === "completed" ? (
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getPaymentBadge(selectedBooking.payment_status)}`}>
+                          {getPaymentLabel(selectedBooking)}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-slate-300">—</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {selectedBooking.status === "cancelled" && selectedBooking.cancel_reason && (
+                    <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-700">
+                      <span className="font-semibold">Cancellation reason:</span> {selectedBooking.cancel_reason}
+                    </div>
+                  )}
+
+                  {selectedBooking.status === "confirmed" && selectedBooking.acceptance_note && (
+                    <div className="rounded-2xl bg-teal-50 p-4 text-sm text-teal-700">
+                      <span className="font-semibold">Provider note:</span> {selectedBooking.acceptance_note}
+                    </div>
+                  )}
+
+                  {selectedBooking.needs_admin_review && (
+                    <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-700">
+                      This booking has been flagged for admin review after repeated rejections. Our support team will follow up shortly.
+                    </div>
+                  )}
+
+                  {(selectedBooking.status === "pending_confirmation" || proofs.length > 0) && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Proof of Completion</p>
+                      {loadingProofs ? (
+                        <p className="mt-2 text-sm text-slate-400">Loading...</p>
+                      ) : proofs.length === 0 ? (
+                        <p className="mt-2 text-sm italic text-slate-400">No proof submitted yet.</p>
+                      ) : (
+                        <div className="mt-3 space-y-3">
+                          {proofs.map((p) => (
+                            <div key={p.id} className="rounded-xl border border-slate-100 p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-semibold text-slate-500">Attempt #{p.attempt_number}</span>
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                  p.status === "approved" ? "bg-teal-100 text-teal-700" :
+                                  p.status === "rejected" ? "bg-red-100 text-red-700" :
+                                  "bg-amber-100 text-amber-700"
+                                }`}>
+                                  {p.status === "approved" ? "✓ Approved" : p.status === "rejected" ? "✗ Rejected" : "⏳ Awaiting your review"}
+                                </span>
+                              </div>
+                              <a href={`${API_BASE_URL}${p.photo_url}`} target="_blank" rel="noreferrer">
+                                <img src={`${API_BASE_URL}${p.photo_url}`} alt="Completion proof" className="mt-2 h-40 w-full rounded-lg object-cover" />
+                              </a>
+                              {p.status === "rejected" && p.rejection_reason && (
+                                <p className="mt-2 text-xs text-red-600"><span className="font-semibold">Your reason:</span> {p.rejection_reason}</p>
+                              )}
+                              {p.status === "pending" && (
+                                <div className="mt-3 flex gap-2">
+                                  <button type="button" onClick={() => confirmProof(selectedBooking.id, p.id)} disabled={processingProof}
+                                    className="flex-1 rounded-xl bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-60">
+                                    ✓ Confirm Done
+                                  </button>
+                                  <button type="button" onClick={() => openRejectModal(p.id)} disabled={processingProof}
+                                    className="flex-1 rounded-xl border border-red-300 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60">
+                                    ✗ Reject
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Notes</p>
+                    <p className="mt-2 text-sm text-slate-700">{selectedBooking.notes || "No notes provided."}</p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setChatBooking(selectedBooking)}
+                      className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                    >
+                      Message Provider
+                    </button>
+
+                    {selectedBooking.status === "pending" && (
+                      <button onClick={() => openCancelModal(selectedBooking.id)} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
+                        Cancel
+                      </button>
+                    )}
+
+                    {selectedBooking.status === "completed" && (
+                      submittedFeedbacks.includes(selectedBooking.id) ? (
+                        <span className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-400">✓ Feedback Sent</span>
+                      ) : (
+                        <button onClick={() => openFeedbackModal(selectedBooking)} className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600">
+                          Feedback
+                        </button>
+                      )
+                    )}
+
+                    {showPayButton(selectedBooking) && (
+                      <>
+                        <button onClick={() => handlePayNow(selectedBooking)} disabled={payingId === selectedBooking.id} className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5">
+                          {payingId === selectedBooking.id ? "Processing..." : "Pay via GCash"}
+                        </button>
+                        <button onClick={() => handlePayCash(selectedBooking)} disabled={payingId === selectedBooking.id} className="rounded-xl border border-teal-700 px-4 py-2 text-sm font-semibold text-teal-700 hover:bg-teal-50 disabled:opacity-60 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5">
+                          {payingId === selectedBooking.id ? "Processing..." : "Pay via Cash"}
+                        </button>
+                      </>
+                    )}
+
+                    {["completed", "cancelled"].includes(selectedBooking.status) && (
+                      <button onClick={() => openRebookModal(selectedBooking)} className="rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">
+                        Rebook
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {chatBooking && (() => {
+          const currentUser = JSON.parse(localStorage.getItem("user") || "null");
+          return (
+            <ChatModal
+              bookingId={chatBooking.id}
+              currentUser={currentUser}
+              participantName={chatBooking.provider_name}
+              participantPicture={chatBooking.provider_picture}
+              onClose={() => {
+                setChatBooking(null);
+                const nextParams = new URLSearchParams(searchParams);
+                nextParams.delete("booking_id");
+                nextParams.delete("chat");
+                setSearchParams(nextParams, { replace: true });
+              }}
+            />
+          );
+        })()}
+
+        {/* ── Reject Proof Modal ── */}
+        {rejectProofId && selectedBooking && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+              <h3 className="text-xl font-extrabold text-slate-900">Reject Proof</h3>
+              <p className="mt-2 text-sm text-slate-500">Tell the provider why this isn't acceptable so they can fix it and resubmit.</p>
+              <textarea
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                rows={4}
+                placeholder="e.g. The area shown doesn't match what was requested..."
+                className="mt-4 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-red-400 focus:outline-none"
+              />
+              <div className="mt-6 flex gap-3">
+                <button type="button" onClick={closeRejectModal} disabled={processingProof}
+                  className="flex-1 rounded-xl border border-slate-200 px-4 py-3 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                  Cancel
+                </button>
+                <button type="button" onClick={() => submitRejectProof(selectedBooking.id)} disabled={processingProof || !rejectReason.trim()}
+                  className="flex-1 rounded-xl bg-red-600 px-4 py-3 font-semibold text-white hover:bg-red-700 disabled:opacity-60">
+                  {processingProof ? "Submitting..." : "Reject"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Cancel Modal ── */}
         {cancelBookingId && (
@@ -482,7 +779,7 @@ export default function ResidentBookings() {
                 <span className="font-semibold text-slate-700">{rebookSource.provider_name}</span>
               </p>
               <div className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600 space-y-1">
-                <div><span className="font-medium">Original Booking:</span> #{rebookSource.id}</div>
+                <div><span className="font-medium">Original Booking:</span> {formatBookingId(rebookSource.id)}</div>
                 <div><span className="font-medium">Service:</span> {rebookSource.service_name}</div>
                 <div><span className="font-medium">Estimated Amount:</span> ₱{rebookSource.amount || 0}</div>
               </div>
@@ -528,7 +825,7 @@ export default function ResidentBookings() {
             <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-xl">
               <h3 className="text-xl font-extrabold text-slate-900">Leave Feedback</h3>
               <p className="mt-1 text-slate-500">
-                Booking #{feedbackBooking.id} • <span className="font-semibold text-slate-700">{feedbackBooking.service_name}</span> with {feedbackBooking.provider_name}
+                Booking {formatBookingId(feedbackBooking.id)} • <span className="font-semibold text-slate-700">{feedbackBooking.service_name}</span> with {feedbackBooking.provider_name}
               </p>
               <form onSubmit={handleFeedbackSubmit} className="mt-5 space-y-5">
                 <div>

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, func, ForeignKey, Boolean, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, func, ForeignKey, Boolean, Float, Index
 from database import Base
 
 
@@ -19,6 +19,14 @@ class User(Base):
     password = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False)  # resident, pro, admin
     phone = Column(String(50), nullable=True)
+    phone_verified = Column(Boolean, default=False)
+    phone_otp_hash = Column(String(128), nullable=True)
+    phone_otp_expires = Column(DateTime, nullable=True)
+    credential_types = Column(Text, nullable=True)
+    experience_years = Column(Integer, nullable=True)
+    experience_description = Column(Text, nullable=True)
+    skill_assessment_requested = Column(Boolean, default=False)
+    enhanced_verification_status = Column(String(30), nullable=True)
     address = Column(Text, nullable=True)
     profile_picture = Column(String(500), nullable=True)  # ← NEW: e.g. "uploads/profile_pictures/3/abc.jpg"
     verification_status = Column(String(50), nullable=True, default="approved")
@@ -97,6 +105,34 @@ class Booking(Base):
     cancel_reason = Column(String(255), nullable=True)
     payment_status = Column(String(50), nullable=True, default="unpaid")
     payment_id = Column(String(255), nullable=True)
+    payment_method = Column(String(20), nullable=True)
+    needs_admin_review = Column(Boolean, default=False)
+
+
+class CompletionProof(Base):
+    __tablename__ = "completion_proofs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
+    photo_url = Column(String(500), nullable=False)
+    submitted_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected
+    rejection_reason = Column(String(500), nullable=True)
+    submitted_at = Column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    message = Column(Text, nullable=False)
+    attachment_url = Column(String(500), nullable=True)
+    is_read = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class Notification(Base):
@@ -110,3 +146,28 @@ class Notification(Base):
     is_read = Column(Boolean, default=False)
     related_booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProviderWalletTransaction(Base):
+    __tablename__ = "provider_wallet_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    transaction_id = Column(String(80), nullable=False, unique=True, index=True)
+    provider_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True, index=True)
+    transaction_type = Column(String(30), nullable=False)  # top_up, earning, fee, refund
+    amount = Column(Integer, nullable=False)  # signed integer pesos
+    balance_after = Column(Integer, nullable=False)
+    payment_id = Column(String(255), nullable=True, index=True)
+    reference = Column(String(255), nullable=True)
+    status = Column(String(20), nullable=False, default="completed")
+    previous_hash = Column(String(64), nullable=True)
+    transaction_hash = Column(String(64), nullable=False, unique=True)
+    current_hash = Column(String(64), nullable=True)
+    previous_transaction_hash = Column(String(64), nullable=True)
+    description = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_wallet_provider_created", "provider_id", "created_at"),
+    )

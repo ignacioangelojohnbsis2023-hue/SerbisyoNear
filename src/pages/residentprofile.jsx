@@ -183,6 +183,10 @@ export default function ResidentProfile() {
         const res = await fetch(`${API_BASE_URL}/profile/${user.id}`);
         const data = await res.json();
         if (data.status === "success") {
+          const storedUser = JSON.parse(localStorage.getItem("user") || "null");
+          const syncedUser = { ...storedUser, ...data.user };
+          localStorage.setItem("user", JSON.stringify(syncedUser));
+          window.dispatchEvent(new CustomEvent("serbisyonear-user-updated", { detail: syncedUser }));
           setForm({
             full_name: data.user.full_name || "",
             email: data.user.email || "",
@@ -216,7 +220,9 @@ export default function ResidentProfile() {
       const data = await res.json();
       if (data.status === "success") {
         setForm((prev) => ({ ...prev, profile_picture: data.profile_picture }));
-        localStorage.setItem("user", JSON.stringify({ ...user, profile_picture: data.profile_picture }));
+        const syncedUser = { ...user, profile_picture: data.profile_picture };
+        localStorage.setItem("user", JSON.stringify(syncedUser));
+        window.dispatchEvent(new CustomEvent("serbisyonear-user-updated", { detail: syncedUser }));
         setSuccessMessage("Profile picture updated!");
       } else {
         setErrorMessage(data.message || "Failed to upload photo.");
@@ -302,7 +308,7 @@ export default function ResidentProfile() {
             <div className="lg:col-span-1 space-y-4">
 
               {/* Avatar Card */}
-              <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm text-center">
+              <div className="prototype-card p-6 text-center">
                 <AvatarUpload
                   name={form.full_name}
                   photoUrl={form.profile_picture}
@@ -318,7 +324,7 @@ export default function ResidentProfile() {
               </div>
 
               {/* Account Info */}
-              <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm space-y-3">
+              <div className="prototype-card space-y-3 p-5">
                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Account Info</h3>
                 <div className="flex items-start gap-3">
                   <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100">
@@ -364,7 +370,7 @@ export default function ResidentProfile() {
             <div className="lg:col-span-2 space-y-5">
 
               {/* Edit Profile */}
-              <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+              <div className="prototype-card p-6">
                 <div className="mb-5">
                   <h2 className="text-lg font-extrabold text-slate-900">Edit Profile</h2>
                   <p className="text-sm text-slate-500 mt-1">Update your personal information.</p>
@@ -403,7 +409,7 @@ export default function ResidentProfile() {
               </div>
 
               {/* Change Password */}
-              <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+              <div className="hidden">
                 <button
                   onClick={() => { setShowPwSection(v => !v); setPwError(""); setPwSuccess(""); }}
                   className="flex w-full items-center justify-between text-left">

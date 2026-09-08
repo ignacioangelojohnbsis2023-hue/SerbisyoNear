@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import ProLayout from "../components/ProLayout";
+import ChatModal from "../components/ChatModal";
 import { API_BASE_URL } from "../lib/api";
 
 const PER_PAGE = 8;
@@ -37,18 +39,34 @@ function Pagination({ total, page, perPage, onPage }) {
 }
 
 export default function ProJobs() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedJobId, setSelectedJobId] = useState(null);
+  const [chatJob, setChatJob] = useState(null);
   const [completeJobId, setCompleteJobId] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [receiptJob, setReceiptJob] = useState(null);
   const [page, setPage] = useState(1);
+  const [sortBy, setSortBy] = useState("newest");
+
+  const [proofModalJobId, setProofModalJobId] = useState(null);
+  const [proofFile, setProofFile] = useState(null);
+  const [proofPreview, setProofPreview] = useState(null);
+  const [submittingProof, setSubmittingProof] = useState(false);
+  const [proofs, setProofs] = useState([]);
+  const [loadingProofs, setLoadingProofs] = useState(false);
+
 
   const providerName = (() => {
     try { return JSON.parse(localStorage.getItem("user"))?.full_name || "Provider"; }
     catch { return "Provider"; }
+  })();
+  const currentUser = (() => {
+    try { return JSON.parse(localStorage.getItem("user") || "null"); }
+    catch { return null; }
   })();
 
   useEffect(() => {
@@ -69,9 +87,28 @@ export default function ProJobs() {
       }
     }
     fetchJobs();
+    const interval = setInterval(fetchJobs, 6000);
+    return () => clearInterval(interval);
   }, []);
 
-  function openCompleteModal(jobId) { setCompleteJobId(jobId); }
+  useEffect(() => {
+    const bookingId = Number(searchParams.get("booking_id"));
+    if (!bookingId) return;
+    const targetJob = jobs.find((job) => job.id === bookingId);
+    if (targetJob) {
+      setSelectedJobId(bookingId);
+      if (searchParams.get("chat") === "1") setChatJob(targetJob);
+
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("booking_id");
+      nextParams.delete("chat");
+      if (nextParams.toString() !== searchParams.toString()) {
+        setSearchParams(nextParams, { replace: true });
+      }
+    }
+  }, [jobs, searchParams, setSearchParams]);
+
+  function openCompleteModal(jobId) { setSelectedJobId(null); setCompleteJobId(jobId); }
   function closeCompleteModal() { if (processing) return; setCompleteJobId(null); }
 
   async function confirmCompleteJob() {
@@ -90,6 +127,93 @@ export default function ProJobs() {
     } catch (error) {
       console.error(error);
       setErrorMessage("Something went wrong while completing job.");
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  async function loadProofs(jobId) {
+    if (!jobId) { setProofs([]); return; }
+    setLoadingProofs(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/bookings/${jobId}/completion-proofs`);
+      const data = await res.json();
+      if (data.status === "success") setProofs(data.proofs);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoadingProofs(false);
+    }
+  }
+
+  useEffect(() => {
+    if (selectedJobId) loadProofs(selectedJobId);
+    else setProofs([]);
+  }, [selectedJobId]);
+
+  function openProofModal(jobId) {
+    setProofFile(null);
+    setProofPreview(null);
+    setProofModalJobId(jobId);
+  }
+  function closeProofModal() { if (submittingProof) return; setProofModalJobId(null); }
+
+  function handleProofFileChange(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setErrorMessage("Proof photo must be JPEG, PNG, or WEBP.");
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      setErrorMessage("Proof photo must be under 3 MB.");
+      return;
+    }
+    setProofFile(file);
+    const reader = new FileReader();
+    reader.onload = (ev) => setProofPreview(ev.target.result);
+    reader.readAsDataURL(file);
+  }
+
+  async function submitProof() {
+    if (!proofModalJobId || !proofFile || !currentUser?.id) return;
+    setSubmittingProof(true);
+    try {
+      const fd = new FormData();
+      fd.append("provider_id", currentUser.id);
+      fd.append("file", proofFile);
+      const res = await fetch(`${API_BASE_URL}/bookings/${proofModalJobId}/completion-proof`, { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.status === "success") {
+        setJobs((prev) => prev.map((job) => job.id === proofModalJobId ? { ...job, status: "pending_confirmation" } : job));
+        setSuccessMessage("Proof of completion submitted. Waiting for resident to confirm.");
+        setProofModalJobId(null);
+        loadProofs(proofModalJobId);
+      } else {
+        setErrorMessage(data.message || "Failed to submit proof.");
+      }
+    } catch (error) {
+      console.error(error);
+      setErrorMessage("Something went wrong while submitting proof.");
+    } finally {
+      setSubmittingProof(false);
+    }
+  }
+
+  async function confirmCashPayment(jobId) {
+    try {
+      setProcessing(true);
+      const res = await fetch(`${API_BASE_URL}/payment/cash/${jobId}/confirm`, { method: "PUT" });
+      const data = await res.json();
+      if (data.status === "success") {
+        setJobs((prev) => prev.map((job) => job.id === jobId ? { ...job, payment_status: "paid" } : job));
+        setSuccessMessage("Cash payment confirmed.");
+      } else {
+        setErrorMessage(data.message || "Failed to confirm cash payment.");
+      }
+    } catch (error) {
+      console.error(error);
+      setErrorMessage("Something went wrong while confirming payment.");
     } finally {
       setProcessing(false);
     }
@@ -266,9 +390,16 @@ export default function ProJobs() {
   function getStatusBadge(status) {
     if (status === "confirmed") return "bg-emerald-100 text-emerald-700";
     if (status === "pending")   return "bg-amber-100 text-amber-700";
+    if (status === "pending_confirmation") return "bg-purple-100 text-purple-700";
     if (status === "cancelled") return "bg-red-100 text-red-700";
     if (status === "completed") return "bg-blue-100 text-blue-700";
     return "bg-slate-100 text-slate-700";
+  }
+
+  function getStatusLabel(status) {
+    if (status === "pending_confirmation") return "Awaiting Resident Confirmation";
+    if (!status) return "—";
+    return status.charAt(0).toUpperCase() + status.slice(1);
   }
 
   function formatDate(str) {
@@ -290,8 +421,16 @@ export default function ProJobs() {
     return `SN-${y}${m}${d}-${id}`;
   }
 
-  const selectedJob = jobs.find((job) => job.id === completeJobId);
-  const pagedJobs = jobs.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+  const selectedJob = jobs.find((job) => job.id === selectedJobId) || jobs.find((job) => job.id === completeJobId);
+  const sortedJobs = [...jobs].sort((a, b) => {
+    if (sortBy === "date-asc") return new Date(a.booking_date) - new Date(b.booking_date);
+    if (sortBy === "date-desc") return new Date(b.booking_date) - new Date(a.booking_date);
+    if (sortBy === "amount-desc") return Number(b.amount || 0) - Number(a.amount || 0);
+    if (sortBy === "amount-asc") return Number(a.amount || 0) - Number(b.amount || 0);
+    if (sortBy === "name") return (a.service_name || "").localeCompare(b.service_name || "");
+    return new Date(b.created_at || b.booking_date) - new Date(a.created_at || a.booking_date);
+  });
+  const pagedJobs = sortedJobs.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
   return (
     <ProLayout title="My Jobs">
@@ -312,9 +451,26 @@ export default function ProJobs() {
         )}
 
         <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-          <div className="mb-5">
-            <h2 className="text-2xl font-extrabold text-slate-900">My Jobs</h2>
-            <p className="mt-2 text-slate-500">View all bookings assigned to you.</p>
+          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Overview</p>
+              <h2 className="mt-1 text-xl font-extrabold text-slate-900 sm:text-2xl">Recent jobs</h2>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+              <span>Sort by</span>
+              <select
+                value={sortBy}
+                onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-teal-500"
+              >
+                <option value="newest">Newest</option>
+                <option value="date-asc">Date: oldest first</option>
+                <option value="date-desc">Date: newest first</option>
+                <option value="amount-desc">Amount: highest</option>
+                <option value="amount-asc">Amount: lowest</option>
+                <option value="name">Service name</option>
+              </select>
+            </label>
           </div>
 
           {loading ? (
@@ -323,62 +479,208 @@ export default function ProJobs() {
             <p className="text-slate-500">You have no jobs yet.</p>
           ) : (
             <>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1250px] text-left">
-                <thead>
-                  <tr className="border-b border-slate-100 text-sm text-slate-500">
-                    <th className="pb-3 font-semibold">Service</th>
-                    <th className="pb-3 font-semibold">Resident</th>
-                    <th className="pb-3 font-semibold">Booking Date</th>
-                    <th className="pb-3 font-semibold">Created At</th>
-                    <th className="pb-3 font-semibold">Amount</th>
-                    <th className="pb-3 font-semibold">Status</th>
-                    <th className="pb-3 font-semibold">Notes</th>
-                    <th className="pb-3 font-semibold">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedJobs.map((job) => (
-                    <tr key={job.id} className="border-b border-slate-50">
-                      <td className="py-4 font-medium text-slate-900">{job.service_name}</td>
-                      <td className="py-4 text-slate-600">{job.resident_name}</td>
-                      <td className="py-4 text-slate-600">{job.booking_date}</td>
-                      <td className="py-4 text-slate-400 text-sm">{formatDate(job.created_at)}</td>
-                      <td className="py-4 font-semibold text-emerald-700">₱{Number(job.amount || 0).toLocaleString()}</td>
-                      <td className="py-4">
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadge(job.status)}`}>
-                          {job.status}
-                        </span>
-                      </td>
-                      <td className="py-4 text-slate-600">{job.notes || "-"}</td>
-                      <td className="py-4">
-                        <div className="flex flex-col gap-2">
-                          {job.status === "confirmed" && (
-                            <button onClick={() => openCompleteModal(job.id)} disabled={processing}
-                              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-                              Mark as Completed
-                            </button>
-                          )}
-                          {job.status === "completed" && (
-                            <button onClick={() => setReceiptJob(job)}
-                              className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800">
-                              View Receipt
-                            </button>
-                          )}
-                          {job.status !== "confirmed" && job.status !== "completed" && (
-                            <span className="text-sm text-slate-400">No actions</span>
-                          )}
+              <div className="space-y-3">
+                {pagedJobs.map((job) => (
+                  <div key={job.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 transition hover:border-teal-200 hover:bg-white hover:shadow-sm">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-base font-bold text-slate-900 sm:text-lg">{job.service_name}</h3>
+                          <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getStatusBadge(job.status)}`}>
+                            {getStatusLabel(job.status)}
+                          </span>
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <Pagination total={jobs.length} page={page} perPage={PER_PAGE} onPage={setPage} />
+                        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+                          <span className="font-medium text-slate-800">{job.resident_name}</span>
+                          <span>{formatDate(job.booking_date)}</span>
+                          <span className="font-semibold text-emerald-700">₱{Number(job.amount || 0).toLocaleString()}</span>
+                        </div>
+                        <p className="mt-2 line-clamp-2 text-sm text-slate-500">
+                          {job.resident_address || "No address on file"}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-start sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedJobId(job.id)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-teal-700 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-teal-800"
+                        >
+                          View details
+                          <span aria-hidden="true" className="text-sm">→</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <Pagination total={jobs.length} page={page} perPage={PER_PAGE} onPage={setPage} />
             </>
           )}
         </div>
+
+        {selectedJob && (
+          <div className="fixed inset-0 z-50 flex justify-end bg-black/40">
+            <div className="h-full w-full max-w-xl overflow-y-auto bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">Job details</p>
+                  <h3 className="mt-1 text-xl font-extrabold text-slate-900">{selectedJob.service_name}</h3>
+                </div>
+                <button onClick={() => setSelectedJobId(null)} className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">Close</button>
+              </div>
+
+              <div className="space-y-4 p-5">
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Resident</p>
+                  <p className="mt-2 text-lg font-bold text-slate-900">{selectedJob.resident_name}</p>
+                  {selectedJob.resident_phone ? (
+                    <a href={`tel:${selectedJob.resident_phone}`} className="mt-2 inline-flex items-center gap-1.5 rounded-xl bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800">
+                      📞 {selectedJob.resident_phone}
+                    </a>
+                  ) : (
+                    <p className="mt-2 text-sm italic text-slate-400">No phone number on file</p>
+                  )}
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Booking date</p>
+                    <p className="mt-2 text-base font-bold text-slate-900">{selectedJob.booking_date}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Created</p>
+                    <p className="mt-2 text-base font-bold text-slate-900">{formatDate(selectedJob.created_at)}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Status</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${getStatusBadge(selectedJob.status)}`}>
+                      {getStatusLabel(selectedJob.status)}
+                    </span>
+                    <span className="text-sm font-semibold text-emerald-700">₱{Number(selectedJob.amount || 0).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Resident location</p>
+                  {selectedJob.resident_address ? (
+                    <div className="mt-2 space-y-2">
+                      <p className="text-base font-semibold text-slate-800">📍 {selectedJob.resident_address}</p>
+                      {selectedJob.resident_lat != null && selectedJob.resident_lon != null && (
+                        <p className="text-sm text-slate-500">
+                          Coordinates: {Number(selectedJob.resident_lat).toFixed(5)}, {Number(selectedJob.resident_lon).toFixed(5)}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm italic text-slate-400">No address or coordinates available.</p>
+                  )}
+                </div>
+
+                {selectedJob.status === "confirmed" && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Payment</p>
+                    <div className="mt-2 flex items-center justify-between gap-3">
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        selectedJob.payment_status === "paid" ? "bg-teal-100 text-teal-700" :
+                        selectedJob.payment_status === "cash_pending" || selectedJob.payment_status === "pending" ? "bg-amber-100 text-amber-700" :
+                        "bg-slate-100 text-slate-500"
+                      }`}>
+                        {selectedJob.payment_status === "paid" ? "✓ Paid" :
+                          selectedJob.payment_status === "cash_pending" ? "⏳ Cash payment pending confirmation" :
+                          selectedJob.payment_status === "pending" ? "⏳ GCash payment pending" :
+                          "Unpaid"}
+                      </span>
+                      {selectedJob.payment_status === "cash_pending" && (
+                        <button type="button" onClick={() => confirmCashPayment(selectedJob.id)} disabled={processing}
+                          className="rounded-xl bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60">
+                          Confirm Cash Received
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {(selectedJob.status === "confirmed" || selectedJob.status === "pending_confirmation") && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Proof of Completion</p>
+                      {selectedJob.status === "confirmed" && !selectedJob.needs_admin_review && (
+                        <button type="button" onClick={() => openProofModal(selectedJob.id)}
+                          className="rounded-xl bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-purple-700">
+                          📸 Submit Proof
+                        </button>
+                      )}
+                    </div>
+                    {selectedJob.needs_admin_review && (
+                      <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+                        This booking has been flagged for admin review after repeated rejections. Please contact support.
+                      </p>
+                    )}
+                    {loadingProofs ? (
+                      <p className="mt-2 text-sm text-slate-400">Loading history...</p>
+                    ) : proofs.length === 0 ? (
+                      <p className="mt-2 text-sm italic text-slate-400">No proof submitted yet.</p>
+                    ) : (
+                      <div className="mt-3 space-y-3">
+                        {proofs.map((p) => (
+                          <div key={p.id} className="rounded-xl border border-slate-100 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-slate-500">Attempt #{p.attempt_number}</span>
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                p.status === "approved" ? "bg-teal-100 text-teal-700" :
+                                p.status === "rejected" ? "bg-red-100 text-red-700" :
+                                "bg-amber-100 text-amber-700"
+                              }`}>
+                                {p.status === "approved" ? "✓ Approved" : p.status === "rejected" ? "✗ Rejected" : "⏳ Pending review"}
+                              </span>
+                            </div>
+                            <a href={`${API_BASE_URL}${p.photo_url}`} target="_blank" rel="noreferrer">
+                              <img src={`${API_BASE_URL}${p.photo_url}`} alt="Completion proof" className="mt-2 h-32 w-full rounded-lg object-cover" />
+                            </a>
+                            {p.status === "rejected" && p.rejection_reason && (
+                              <p className="mt-2 text-xs text-red-600"><span className="font-semibold">Reason:</span> {p.rejection_reason}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {selectedJob.notes && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Job notes</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">{selectedJob.notes}</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-3 border-t border-slate-200 px-5 py-4">
+                <button type="button" onClick={() => setSelectedJobId(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 font-semibold text-slate-700 hover:bg-slate-50">Back</button>
+                <button type="button" onClick={() => setChatJob(selectedJob)} className="flex-1 rounded-xl bg-sky-600 px-4 py-3 font-semibold text-white hover:bg-sky-700">Message Resident</button>
+                {selectedJob.status === "pending_confirmation" && (
+                  <button type="button" onClick={() => openCompleteModal(selectedJob.id)} disabled={processing || selectedJob.payment_status !== "paid"}
+                    title={selectedJob.payment_status !== "paid" ? "Resident must complete payment first" : undefined}
+                    className="flex-1 rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed">
+                    Mark as Completed
+                  </button>
+                )}
+
+
+                {selectedJob.status === "completed" && (
+                  <button type="button" onClick={() => setReceiptJob(selectedJob)}
+                    className="flex-1 rounded-xl bg-teal-700 px-4 py-3 font-semibold text-white hover:bg-teal-800">
+                    View Receipt
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Complete Job Modal */}
         {completeJobId && selectedJob && (
@@ -400,6 +702,50 @@ export default function ProJobs() {
                 <button type="button" onClick={confirmCompleteJob} disabled={processing}
                   className="flex-1 rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
                   {processing ? "Completing..." : "Yes, Complete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {chatJob && (
+          <ChatModal
+            bookingId={chatJob.id}
+            currentUser={currentUser}
+            participantName={chatJob.resident_name}
+            participantPicture={chatJob.resident_picture}
+            onClose={() => {
+              setChatJob(null);
+              const nextParams = new URLSearchParams(searchParams);
+              nextParams.delete("booking_id");
+              nextParams.delete("chat");
+              setSearchParams(nextParams, { replace: true });
+            }}
+          />
+        )}
+
+        {/* Submit Proof of Completion Modal */}
+        {proofModalJobId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+              <h3 className="text-xl font-extrabold text-slate-900">Submit Proof of Completion</h3>
+              <p className="mt-2 text-sm text-slate-500">Take or upload a photo showing the finished service. The resident will review it before you can mark the job as completed.</p>
+              <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 p-6 hover:border-purple-400">
+                {proofPreview ? (
+                  <img src={proofPreview} alt="Proof preview" className="h-40 w-full rounded-xl object-cover" />
+                ) : (
+                  <span className="text-sm text-slate-400">📷 Click to select a photo (JPEG/PNG/WEBP, max 3MB)</span>
+                )}
+                <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handleProofFileChange} />
+              </label>
+              <div className="mt-6 flex gap-3">
+                <button type="button" onClick={closeProofModal} disabled={submittingProof}
+                  className="flex-1 rounded-xl border border-slate-200 px-4 py-3 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                  Cancel
+                </button>
+                <button type="button" onClick={submitProof} disabled={submittingProof || !proofFile}
+                  className="flex-1 rounded-xl bg-purple-600 px-4 py-3 font-semibold text-white hover:bg-purple-700 disabled:opacity-60">
+                  {submittingProof ? "Submitting..." : "Submit Proof"}
                 </button>
               </div>
             </div>

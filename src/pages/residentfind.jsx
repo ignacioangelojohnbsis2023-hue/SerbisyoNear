@@ -255,7 +255,7 @@ export default function ResidentFind() {
         )}
 
         {/* MAP */}
-        <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+        <div className="prototype-card p-5 sm:p-6">
           <h2 className="mb-4 text-lg font-bold text-slate-900">Provider Locations</h2>
           {loading ? (
             <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-slate-400">Loading map...</div>
@@ -268,7 +268,7 @@ export default function ResidentFind() {
         </div>
 
         {/* SEARCH + FILTERS */}
-        <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+        <div className="prototype-card p-5 sm:p-6">
           <h2 className="text-2xl font-extrabold text-slate-900">Available Providers</h2>
           <p className="mt-2 text-slate-500">Browse approved service providers and the services they offer.</p>
 
@@ -334,7 +334,7 @@ export default function ResidentFind() {
               const totalReviews = summary?.total || 0;
 
               return (
-                <div key={provider.id} className="flex flex-col rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+                <div key={provider.id} className="prototype-card flex flex-col p-5">
                   {/* Avatar + Name + rating */}
                   <div className="flex items-start gap-3">
                     <ProviderAvatar name={provider.full_name} photoUrl={provider.profile_picture} />
