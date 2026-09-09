@@ -5,6 +5,15 @@ import { API_BASE_URL } from "../lib/api";
 
 const PER_PAGE = 8;
 
+function getDirectionsUrl(request) {
+  if (request.resident_lat == null || request.resident_lon == null) return null;
+  const destination = `${request.resident_lat},${request.resident_lon}`;
+  const origin = request.provider_lat != null && request.provider_lon != null
+    ? `&origin=${encodeURIComponent(`${request.provider_lat},${request.provider_lon}`)}`
+    : "";
+  return `https://www.google.com/maps/dir/?api=1${origin}&destination=${encodeURIComponent(destination)}`;
+}
+
 function Pagination({ total, page, perPage, onPage }) {
   const totalPages = Math.ceil(total / perPage);
   if (totalPages <= 1) return null;
@@ -313,7 +322,28 @@ export default function ProRequests() {
                   <div className="space-y-1 pt-2">
                     <span className="text-slate-500">Resident Location</span>
                     {actionModal.request.resident_address && (
-                      <p className="font-medium text-slate-700">📍 {actionModal.request.resident_address}</p>
+                      getDirectionsUrl(actionModal.request) ? (
+                        <a
+                          href={getDirectionsUrl(actionModal.request)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block font-medium text-teal-700 underline decoration-teal-200 underline-offset-2 hover:text-teal-800"
+                        >
+                          📍 {actionModal.request.resident_address}
+                        </a>
+                      ) : (
+                        <p className="font-medium text-slate-700">📍 {actionModal.request.resident_address}</p>
+                      )
+                    )}
+                    {getDirectionsUrl(actionModal.request) && !actionModal.request.resident_address && (
+                      <a
+                        href={getDirectionsUrl(actionModal.request)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex rounded-xl bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800"
+                      >
+                        View directions
+                      </a>
                     )}
                     {actionModal.request.resident_lat != null && actionModal.request.resident_lon != null && (
                       <p className="text-xs text-slate-500">

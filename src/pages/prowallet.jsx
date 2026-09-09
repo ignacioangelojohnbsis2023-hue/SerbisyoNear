@@ -3,6 +3,13 @@ import ProLayout from "../components/ProLayout";
 import { API_BASE_URL } from "../lib/api";
 
 const money = (value) => `₱${Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const transactionLabel = (type) => ({
+  top_up: "Top Up",
+  commission_deduction: "Commission Deduction",
+  refund: "Refund",
+  earning: "Earning",
+  fee: "Fee",
+}[type] || String(type || "").replaceAll("_", " "));
 
 export default function ProWallet() {
   const [wallet, setWallet] = useState({ balance: 0, transactions: [] });
@@ -17,6 +24,7 @@ export default function ProWallet() {
     if (!user?.id) return;
     setLoading(true);
     try {
+      await fetch(`${API_BASE_URL}/pro/wallet/${user.id}/top-up/reconcile`, { method: "POST" });
       const response = await fetch(`${API_BASE_URL}/pro/wallet/${user.id}`);
       const data = await response.json();
       if (data.status === "success") setWallet({ balance: data.balance || 0, transactions: data.transactions || [] });
@@ -46,7 +54,10 @@ export default function ProWallet() {
       });
       const data = await response.json();
       if (data.status !== "success") throw new Error(data.message || "Unable to start top-up.");
-      if (data.checkout_url) window.location.href = data.checkout_url;
+      if (data.checkout_url) {
+        localStorage.setItem("pending_wallet_payment_id", data.payment_id);
+        window.location.href = data.checkout_url;
+      }
       else setMessage("Top-up started. Your balance will update after payment confirmation.");
       setTopUpOpen(false);
     } catch (error) {
@@ -70,9 +81,15 @@ export default function ProWallet() {
           <div className="border-b border-[#E9E2D2] p-5"><h2 className="font-display text-lg font-bold text-slate-900">Transaction Log</h2><p className="mt-1 text-sm text-slate-500">Your append-only commission and top-up history.</p></div>
           {wallet.transactions.length === 0 ? <div className="p-10 text-center text-sm text-slate-500">No wallet activity yet. Top up before accepting your first job.</div> : (
             <div className="divide-y divide-[#E9E2D2]">{wallet.transactions.map((item) => (
-              <div key={item.transaction_id || item.id} className="flex flex-wrap items-center justify-between gap-3 p-5">
-                <div><p className="text-sm font-semibold text-slate-900">{item.type_label || item.type}</p><p className="mt-1 text-xs text-slate-500">{item.timestamp || item.created_at ? new Date(item.timestamp || item.created_at).toLocaleString() : "—"}{item.related_booking_id || item.booking_id ? ` · Booking #${item.related_booking_id || item.booking_id}` : ""}</p></div>
-                <div className="text-right"><p className={`text-sm font-bold ${Number(item.amount) >= 0 ? "text-emerald-700" : "text-red-600"}`}>{Number(item.amount) >= 0 ? "+" : ""}{money(item.amount)}</p><p className="mt-1 text-xs text-slate-500">{item.status} · Balance {money(item.resulting_balance ?? item.balance_after)}</p></div>
+              <div key={item.transaction_id || item.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 p-5">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-900">{item.type_label || transactionLabel(item.type)}</p>
+                  <p className="mt-1 text-xs text-slate-500">{item.timestamp || item.created_at ? new Date(item.timestamp || item.created_at).toLocaleString() : "—"}{item.related_booking_id || item.booking_id ? ` · Booking #${item.related_booking_id || item.booking_id}` : ""}</p>
+                </div>
+                <div className="text-right">
+                  <p className={`whitespace-nowrap text-sm font-bold ${Number(item.amount) >= 0 ? "text-emerald-700" : "text-red-600"}`}>{Number(item.amount) >= 0 ? "+" : ""}{money(item.amount)}</p>
+                  <p className="mt-1 whitespace-nowrap text-xs text-slate-500">{item.status} · Balance {money(item.resulting_balance ?? item.balance_after)}</p>
+                </div>
               </div>
             ))}</div>
           )}

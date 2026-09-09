@@ -1,8 +1,5 @@
-import { useEffect } from "react";
+import { Navigate } from "react-router-dom";
 
 export default function AdminReports() {
-  useEffect(() => {
-    window.location.replace("/admin/dashboard");
-  }, []);
-  return null;
+  return <Navigate to="/admin" replace />;
 }

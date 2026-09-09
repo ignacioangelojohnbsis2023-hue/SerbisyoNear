@@ -591,7 +591,7 @@ export default function ProJobs() {
                       }`}>
                         {selectedJob.payment_status === "paid" ? "✓ Paid" :
                           selectedJob.payment_status === "cash_pending" ? "⏳ Cash payment pending confirmation" :
-                          selectedJob.payment_status === "pending" ? "⏳ GCash payment pending" :
+                          selectedJob.payment_status === "pending" ? "⏳ Awaiting resident payment" :
                           "Unpaid"}
                       </span>
                       {selectedJob.payment_status === "cash_pending" && (
@@ -662,7 +662,8 @@ export default function ProJobs() {
               <div className="flex flex-wrap gap-3 border-t border-slate-200 px-5 py-4">
                 <button type="button" onClick={() => setSelectedJobId(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 font-semibold text-slate-700 hover:bg-slate-50">Back</button>
                 <button type="button" onClick={() => setChatJob(selectedJob)} className="flex-1 rounded-xl bg-sky-600 px-4 py-3 font-semibold text-white hover:bg-sky-700">Message Resident</button>
-                {selectedJob.status === "pending_confirmation" && (
+                {(selectedJob.status === "pending_confirmation" ||
+                  (selectedJob.status === "confirmed" && proofs.some((proof) => proof.status === "approved"))) && (
                   <button type="button" onClick={() => openCompleteModal(selectedJob.id)} disabled={processing || selectedJob.payment_status !== "paid"}
                     title={selectedJob.payment_status !== "paid" ? "Resident must complete payment first" : undefined}
                     className="flex-1 rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed">

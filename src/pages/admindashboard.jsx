@@ -299,7 +299,7 @@ export default function AdminDashboard() {
                 <h2 className="text-lg font-bold text-slate-900">Service Detail</h2>
                 <p className="mt-0.5 text-sm text-slate-500">Full ranking of booked services.</p>
               </div>
-              <a href="/admin/reports" className="text-sm font-semibold text-teal-700 hover:underline">View reports</a>
+              <a href="/admin" className="text-sm font-semibold text-teal-700 hover:underline">View reports</a>
             </div>
             {reportsLoading ? (
               <div className="space-y-3">
@@ -317,7 +317,6 @@ export default function AdminDashboard() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-100 text-left text-xs text-slate-400 uppercase tracking-wide">
-                      <th className="pb-3 font-semibold">#</th>
                       <th className="pb-3 font-semibold">Service</th>
                       <th className="pb-3 font-semibold">Bookings</th>
                       <th className="pb-3 font-semibold">Share</th>
@@ -328,7 +327,6 @@ export default function AdminDashboard() {
                       const share = reports.summary.total_bookings > 0 ? ((item.count / reports.summary.total_bookings) * 100).toFixed(1) : 0;
                       return (
                         <tr key={index} className="border-t border-slate-50 transition hover:bg-slate-50/60">
-                          <td className="py-3 text-sm font-bold text-slate-300">{index + 1}</td>
                           <td className="py-3 font-semibold text-slate-800">{item.service_name}</td>
                           <td className="py-3 font-bold text-slate-700">{item.count}</td>
                           <td className="py-3">

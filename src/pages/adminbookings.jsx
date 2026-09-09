@@ -3,6 +3,7 @@ import AdminLayout from "../components/AdminLayout";
 import { API_BASE_URL } from "../lib/api";
 
 const PER_PAGE = 10;
+const formatBookingId = (id) => `BK-${String(id).padStart(6, "0")}`;
 
 function Pagination({ total, page, perPage, onPage }) {
   const totalPages = Math.ceil(total / perPage);
@@ -66,7 +67,8 @@ export default function AdminBookings() {
     const keyword = search.trim().toLowerCase();
     return bookings.filter(b => {
       const matchesSearch = !keyword
-        || String(b.id).toLowerCase().includes(keyword)
+      || formatBookingId(b.id).toLowerCase().includes(keyword)
+      || String(b.id).toLowerCase().includes(keyword)
         || (b.service_name || "").toLowerCase().includes(keyword)
         || (b.resident_name || "").toLowerCase().includes(keyword)
         || (b.provider_name || "").toLowerCase().includes(keyword);
@@ -196,7 +198,7 @@ export default function AdminBookings() {
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-base font-bold text-slate-900">#{booking.id} • {booking.service_name}</h3>
+                          <h3 className="text-base font-bold text-slate-900">{formatBookingId(booking.id)} • {booking.service_name}</h3>
                           <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${getStatusBadge(booking.status)}`}>
                             {booking.status}
                           </span>
@@ -225,22 +227,23 @@ export default function AdminBookings() {
               if (!selectedBooking) return null;
 
               return (
-                <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
-                  <div className="mb-4 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Booking details</p>
-                      <h3 className="mt-1 text-xl font-extrabold text-slate-900">#{selectedBooking.id} • {selectedBooking.service_name}</h3>
-                    </div>
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/40 p-4" onClick={() => setSelectedBookingId(null)}>
+                  <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-slate-200 bg-slate-50 p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Booking details</p>
+                        <h3 className="mt-1 text-xl font-extrabold text-slate-900">{formatBookingId(selectedBooking.id)} • {selectedBooking.service_name}</h3>
+                      </div>
                     <button type="button" onClick={() => setSelectedBookingId(null)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-white">
                       Close
                     </button>
                   </div>
 
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                     <div className="rounded-2xl bg-white p-4">
                       <p className="text-xs uppercase tracking-wide text-slate-400">Resident</p>
                       <p className="mt-2 font-semibold text-slate-800">{selectedBooking.resident_name || "—"}</p>
-                    </div>
+                      </div>
                     <div className="rounded-2xl bg-white p-4">
                       <p className="text-xs uppercase tracking-wide text-slate-400">Provider</p>
                       <p className="mt-2 font-semibold text-slate-800">{selectedBooking.provider_name || "—"}</p>
@@ -277,19 +280,20 @@ export default function AdminBookings() {
                     </div>
                   </div>
 
-                  <div className="mt-4 rounded-2xl bg-white p-4">
-                    <p className="text-xs uppercase tracking-wide text-slate-400">Notes</p>
-                    <p className="mt-2 text-sm text-slate-700">{selectedBooking.notes || "No notes provided."}</p>
-                  </div>
+                    <div className="mt-4 rounded-2xl bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-400">Notes</p>
+                      <p className="mt-2 text-sm text-slate-700">{selectedBooking.notes || "No notes provided."}</p>
+                    </div>
 
-                  <div className="mt-5 flex flex-wrap gap-3">
-                    <button onClick={() => handleArchive(selectedBooking.id, selectedBooking.is_archived)}
-                      disabled={actionLoading===selectedBooking.id}
-                      className={`rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 ${
-                        selectedBooking.is_archived ? "bg-slate-100 text-slate-600 hover:bg-slate-200" : "bg-amber-50 text-amber-600 hover:bg-amber-100"
-                      }`}>
-                      {actionLoading===selectedBooking.id ? "..." : selectedBooking.is_archived ? "Unarchive" : "Archive"}
-                    </button>
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      <button onClick={() => handleArchive(selectedBooking.id, selectedBooking.is_archived)}
+                        disabled={actionLoading===selectedBooking.id}
+                        className={`rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 ${
+                          selectedBooking.is_archived ? "bg-slate-100 text-slate-600 hover:bg-slate-200" : "bg-amber-50 text-amber-600 hover:bg-amber-100"
+                        }`}>
+                        {actionLoading===selectedBooking.id ? "..." : selectedBooking.is_archived ? "Unarchive" : "Archive"}
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 import shutil, math, hashlib, json
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
+import bcrypt
 from sqlalchemy import text, inspect
 from sqlalchemy.orm import Session
 from database import engine, Base, SessionLocal
@@ -17,6 +18,25 @@ import secrets
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(password: str, stored_password: str) -> tuple[bool, bool]:
+    """Return (valid, was_legacy_plaintext) for a safe one-time migration."""
+    if stored_password.startswith("$2"):
+        return bcrypt.checkpw(password.encode("utf-8"), stored_password.encode("utf-8")), False
+    return secrets.compare_digest(stored_password, password), True
+
+
+def migrate_legacy_passwords(db: Session) -> int:
+    migrated = 0
+    for user in db.query(User).all():
+        if user.password and not user.password.startswith("$2"):
+            user.password = hash_password(user.password)
+            migrated += 1
+    return migrated
 
 UPLOAD_DIR = "uploads/provider_docs"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -169,6 +189,11 @@ if "is_read" not in {column["name"] for column in inspect(engine).get_columns("c
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE chat_messages ADD COLUMN is_read BOOLEAN NOT NULL DEFAULT FALSE"))
 
+with SessionLocal() as migration_db:
+    migrated_passwords = migrate_legacy_passwords(migration_db)
+    if migrated_passwords:
+        migration_db.commit()
+
 if "attachment_url" not in {column["name"] for column in inspect(engine).get_columns("chat_messages")}:
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE chat_messages ADD COLUMN attachment_url VARCHAR(500) NULL"))
@@ -269,6 +294,23 @@ def get_paymongo_auth():
     encoded = base64.b64encode(f"{secret_key}:".encode()).decode()
     return f"Basic {encoded}"
 
+def reconcile_booking_payment(db, booking: Booking) -> str:
+    if booking.payment_status != "pending" or not booking.payment_id:
+        return booking.payment_status or "unpaid"
+    response = http_requests.get(
+        f"https://api.paymongo.com/v1/links/{booking.payment_id}",
+        headers={"Authorization": get_paymongo_auth()},
+        timeout=15,
+    )
+    if response.status_code != 200:
+        return booking.payment_status
+    link_status = response.json().get("data", {}).get("attributes", {}).get("status")
+    if link_status == "paid":
+        booking.payment_status = "paid"
+    elif link_status in {"unpaid", "active", "pending", "failed", "expired"}:
+        booking.payment_status = "unpaid"
+    return booking.payment_status
+
 WALLET_FEE_RATE = 0.02
 
 def wallet_balance(db, provider_id: int):
@@ -310,6 +352,34 @@ def pending_wallet_topup(db, provider_id: int, amount: int, payment_id: str):
         description="Pending PayMongo wallet top-up")
     db.add(row)
     return row
+
+
+def reconcile_wallet_topup(db, pending: ProviderWalletTransaction) -> str:
+    response = http_requests.get(
+        f"https://api.paymongo.com/v1/links/{pending.payment_id}",
+        headers={"Authorization": get_paymongo_auth()},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise RuntimeError("Failed to verify payment")
+
+    status = response.json().get("data", {}).get("attributes", {}).get("status")
+    if status == "paid":
+        pending.status = "superseded"
+        append_wallet_transaction(
+            db,
+            pending.provider_id,
+            pending.amount,
+            "top up",
+            payment_id=pending.payment_id,
+            reference="paymongo",
+            description="PayMongo wallet top-up",
+        )
+        return "paid"
+    if status in {"failed", "cancelled", "expired"}:
+        pending.status = "rejected"
+        return "failed"
+    return "pending"
 
 
 class UpdateLocationRequest(BaseModel):
@@ -536,19 +606,34 @@ def verify_wallet_topup(provider_id: int, payment_id: str):
         if not pending:
             existing = (db.query(ProviderWalletTransaction).filter(ProviderWalletTransaction.provider_id == provider_id, ProviderWalletTransaction.payment_id == payment_id, ProviderWalletTransaction.status == "completed").first())
             return {"status": "success", "payment_status": "paid", "balance": wallet_balance(db, provider_id)} if existing else {"status": "error", "message": "Pending top-up not found"}
-        response = http_requests.get(f"https://api.paymongo.com/v1/links/{payment_id}", headers={"Authorization": get_paymongo_auth()}, timeout=30)
-        result = response.json()
-        if response.status_code != 200: return {"status": "error", "message": "Failed to verify payment"}
-        if result["data"]["attributes"]["status"] != "paid":
-            pending.status = "rejected"
-            db.commit()
-            return {"status": "success", "payment_status": "failed", "balance": wallet_balance(db, provider_id)}
-        pending.status = "superseded"
-        append_wallet_transaction(db, provider_id, pending.amount, "top_up", payment_id=payment_id, reference="paymongo", description="PayMongo wallet top-up")
+        payment_status = reconcile_wallet_topup(db, pending)
         db.commit()
-        return {"status": "success", "payment_status": "paid", "balance": wallet_balance(db, provider_id)}
+        return {"status": "success", "payment_status": payment_status, "balance": wallet_balance(db, provider_id)}
     except Exception as e:
         db.rollback(); return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+
+@app.post("/pro/wallet/{provider_id}/top-up/reconcile")
+def reconcile_pending_wallet_topups(provider_id: int):
+    db = SessionLocal()
+    try:
+        pending_rows = (db.query(ProviderWalletTransaction)
+                        .filter(
+                            ProviderWalletTransaction.provider_id == provider_id,
+                            ProviderWalletTransaction.status == "pending",
+                        )
+                        .order_by(ProviderWalletTransaction.id.asc())
+                        .all())
+        statuses = []
+        for pending in pending_rows:
+            statuses.append(reconcile_wallet_topup(db, pending))
+        db.commit()
+        return {"status": "success", "statuses": statuses, "balance": wallet_balance(db, provider_id)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
     finally:
         db.close()
 
@@ -569,7 +654,7 @@ async def paymongo_wallet_webhook(request: Request):
             return {"status": "success", "message": "Event already processed or not a wallet top-up."}
         if event_status in {"paid", "succeeded", "payment.paid"}:
             pending.status = "superseded"
-            append_wallet_transaction(db, pending.provider_id, pending.amount, "top_up",
+            append_wallet_transaction(db, pending.provider_id, pending.amount, "top up",
                                       payment_id=payment_id, reference="paymongo_webhook",
                                       description="PayMongo wallet top-up")
         else:
@@ -657,7 +742,8 @@ def create_payment_link(booking_id: int):
         link_id = link_data["id"]
 
         booking.payment_id = link_id
-        booking.payment_status = "pending"
+        # A checkout link is not a payment; wait for PayMongo confirmation.
+        booking.payment_status = "unpaid"
         db.commit()
 
         return {
@@ -1058,7 +1144,8 @@ def change_password(payload: ChangePasswordRequest):
         user = db.query(User).filter(User.id == payload.user_id).first()
         if not user:
             return {"status": "error", "message": "User not found"}
-        if user.password != payload.current_password:
+        current_password_valid, _ = verify_password(payload.current_password, user.password)
+        if not current_password_valid:
             return {"status": "error", "message": "Current password is incorrect"}
         
         password_error = validate_password(payload.new_password)
@@ -1068,7 +1155,7 @@ def change_password(payload: ChangePasswordRequest):
         if payload.current_password == payload.new_password:
             return {"status": "error", "message": "New password must differ from current password"}
 
-        user.password = payload.new_password
+        user.password = hash_password(payload.new_password)
         db.commit()
         return {"status": "success", "message": "Password changed successfully"}
     except Exception as e:
@@ -1854,7 +1941,10 @@ def complete_provider_job(booking_id: int):
         if booking.payment_status != "paid":
             return {"status": "error", "message": "Resident must pay before job can be marked complete"}
 
-        if booking.status != "pending_confirmation":
+        approved_proof = (db.query(CompletionProof)
+                          .filter(CompletionProof.booking_id == booking.id, CompletionProof.status == "approved")
+                          .first())
+        if booking.status != "pending_confirmation" and not (booking.status == "confirmed" and approved_proof):
             return {"status": "error", "message": "Resident must confirm proof of completion before this job can be marked complete"}
 
         fee = math.ceil((booking.amount or 0) * WALLET_FEE_RATE)
@@ -2018,6 +2108,7 @@ def confirm_completion_proof(booking_id: int, proof_id: int, resident_id: int = 
 
         proof.status = "approved"
         proof.reviewed_at = datetime.utcnow()
+        booking.status = "confirmed"
 
         chat_message = ChatMessage(
             booking_id=booking_id,
@@ -2265,8 +2356,13 @@ def get_provider_jobs(provider_id: int):
         )
 
         results = []
+        payment_reconciled = False
         for booking in bookings:
             resident = db.query(User).filter(User.id == booking.resident_id).first()
+            provider = db.query(User).filter(User.id == booking.provider_id).first()
+            previous_payment_status = booking.payment_status
+            reconcile_booking_payment(db, booking)
+            payment_reconciled = payment_reconciled or previous_payment_status != booking.payment_status
             resident_address = get_user_display_address(resident) if resident else None
             results.append({
                 "id": booking.id,
@@ -2282,11 +2378,15 @@ def get_provider_jobs(provider_id: int):
                 "resident_address": resident_address,
                 "resident_lat": resident.lat if resident else None,
                 "resident_lon": resident.lon if resident else None,
+                "provider_lat": provider.lat if provider else None,
+                "provider_lon": provider.lon if provider else None,
                 "payment_status": booking.payment_status or "unpaid",
                 "payment_method": booking.payment_method,
                 "needs_admin_review": booking.needs_admin_review or False,
             })
 
+        if payment_reconciled:
+            db.commit()
         return {"status": "success", "jobs": results}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -2307,6 +2407,7 @@ def get_provider_requests(provider_id: int):
         results = []
         for booking in bookings:
             resident = db.query(User).filter(User.id == booking.resident_id).first()
+            provider = db.query(User).filter(User.id == booking.provider_id).first()
             resident_address = get_user_display_address(resident) if resident else None
             results.append({
                 "id": booking.id,
@@ -2321,6 +2422,8 @@ def get_provider_requests(provider_id: int):
                 "resident_address": resident_address,
                 "resident_lat": resident.lat if resident else None,
                 "resident_lon": resident.lon if resident else None,
+                "provider_lat": provider.lat if provider else None,
+                "provider_lon": provider.lon if provider else None,
             })
 
         return {"status": "success", "requests": results}
@@ -2644,8 +2747,24 @@ def get_resident_bookings(resident_id: int):
         )
 
         results = []
+        repaired_status = False
+        payment_reconciled = False
         for booking in bookings:
             provider = db.query(User).filter(User.id == booking.provider_id).first()
+            previous_payment_status = booking.payment_status
+            reconcile_booking_payment(db, booking)
+            payment_reconciled = payment_reconciled or previous_payment_status != booking.payment_status
+            approved_proof = (
+                db.query(CompletionProof)
+                .filter(
+                    CompletionProof.booking_id == booking.id,
+                    CompletionProof.status == "approved",
+                )
+                .first()
+            )
+            if booking.status == "pending_confirmation" and approved_proof:
+                booking.status = "confirmed"
+                repaired_status = True
             results.append({
                 "id": booking.id,
                 "service_name": booking.service_name,
@@ -2664,6 +2783,8 @@ def get_resident_bookings(resident_id: int):
                 "needs_admin_review": booking.needs_admin_review or False,
             })
 
+        if repaired_status or payment_reconciled:
+            db.commit()
         return {"status": "success", "bookings": results}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -3102,6 +3223,7 @@ def seed_demo_v2():
         db.add(fb1)
         db.add(fb2)
 
+        migrate_legacy_passwords(db)
         db.commit()
         return {
             "status": "success",
@@ -3150,11 +3272,12 @@ def signup(payload: SignupRequest):
                 return {"status": "error", "message": "Providers need a valid Government ID plus at least one experience credential."}
         verification_status = "pending" if payload.role == "pro" else "approved"
         email_verification_token = generate_token()
+        payload.password = hash_password(payload.password)
 
         new_user = User(
             full_name=payload.full_name, first_name=payload.first_name,
             middle_name=payload.middle_name, last_name=payload.last_name,
-            email=payload.email, password=payload.password, role=payload.role,
+            email=payload.email,             password=hash_password(payload.password), role=payload.role,
             phone=payload.phone, phone_verified=payload.phone_verified,
             credential_types=json.dumps(payload.credential_types),
             experience_years=payload.experience_years,
@@ -3215,12 +3338,19 @@ def login(payload: LoginRequest):
     try:
         user = (
             db.query(User)
-            .filter((User.email == payload.identifier) | (User.phone == payload.identifier), User.password == payload.password)
+            .filter((User.email == payload.identifier) | (User.phone == payload.identifier))
             .first()
         )
 
         if not user:
             return {"status": "error", "message": "Invalid email/phone or password"}
+
+        password_valid, was_legacy_plaintext = verify_password(payload.password, user.password)
+        if not password_valid:
+            return {"status": "error", "message": "Invalid email/phone or password"}
+        if was_legacy_plaintext:
+            user.password = hash_password(payload.password)
+            db.commit()
 
         if user.role != "admin" and not user.is_email_verified:
             return {"status": "error", "message": "Please verify your email before logging in."}
@@ -3300,7 +3430,7 @@ def reset_password(payload: ResetPasswordRequest):
         if password_error:
             return {"status": "error", "message": password_error}
 
-        user.password = payload.new_password
+        user.password = hash_password(payload.new_password)
         user.reset_password_token = None
         user.reset_password_expires = None
         db.commit()

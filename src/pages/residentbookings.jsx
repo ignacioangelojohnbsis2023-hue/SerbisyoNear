@@ -303,8 +303,9 @@ export default function ResidentBookings() {
   }
 
   // ── Show Pay options only on confirmed+unpaid ──────────────
-  function showPayButton(booking) {
-    return booking.status === "confirmed" && !["paid", "pending", "cash_pending"].includes(booking.payment_status);
+  function showPayButton(booking, hasApprovedProof = false) {
+    return (booking.status === "confirmed" || hasApprovedProof) &&
+      !["paid", "pending", "cash_pending"].includes(booking.payment_status);
   }
 
   function openCancelModal(bookingId) {
@@ -558,7 +559,7 @@ export default function ResidentBookings() {
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                     <p className="text-xs uppercase tracking-wide text-slate-400">Payment</p>
                     <div className="mt-2">
-                      {selectedBooking.status === "confirmed" || selectedBooking.status === "completed" ? (
+                      {selectedBooking.status === "confirmed" || selectedBooking.status === "completed" || proofs.some((proof) => proof.status === "approved") ? (
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getPaymentBadge(selectedBooking.payment_status)}`}>
                           {getPaymentLabel(selectedBooking)}
                         </span>
@@ -662,7 +663,7 @@ export default function ResidentBookings() {
                       )
                     )}
 
-                    {showPayButton(selectedBooking) && (
+                    {showPayButton(selectedBooking, proofs.some((proof) => proof.status === "approved")) && (
                       <>
                         <button onClick={() => handlePayNow(selectedBooking)} disabled={payingId === selectedBooking.id} className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5">
                           {payingId === selectedBooking.id ? "Processing..." : "Pay via GCash"}

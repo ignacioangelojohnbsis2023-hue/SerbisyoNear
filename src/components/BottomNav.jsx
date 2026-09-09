@@ -34,7 +34,7 @@ export default function BottomNav({ role = "Resident" }) {
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[#E9E2D2] bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-6px_20px_-10px_rgba(20,30,25,.18)] backdrop-blur lg:hidden">
       <div className="mx-auto flex max-w-lg items-stretch justify-around px-1.5 py-2">
         {items.map((item) => {
-          const active = item.to === "/pro"
+          const active = item.to === "/pro" || item.to === "/resident" || item.to === "/admin"
             ? location.pathname === item.to
             : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
           const Icon = item.icon;
