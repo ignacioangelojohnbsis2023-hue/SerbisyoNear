@@ -1,5 +1,5 @@
 export function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371; // radius of Earth in km
+  const R = 6371; 
   const dLat = (lat2 - lat1) * (Math.PI / 180);
   const dLon = (lon2 - lon1) * (Math.PI / 180);
 
@@ -12,5 +12,5 @@ export function calculateDistance(lat1, lon1, lat2, lon2) {
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-  return R * c; // distance in KM
+  return R * c; 
 }

@@ -5,8 +5,8 @@ export default function ProLayout({ title, topRight, children }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="flex min-h-screen">
+    <div className="min-h-screen overflow-x-hidden bg-slate-50">
+      <div className="flex min-h-screen w-full max-w-full overflow-x-hidden">
         {/* Desktop Sidebar */}
         <div className="hidden w-64 shrink-0 lg:block">
           <Sidebar title="Pro" />
@@ -26,7 +26,7 @@ export default function ProLayout({ title, topRight, children }) {
         )}
 
         {/* Right Panel */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 max-w-full flex-1 flex-col overflow-x-hidden">
           {/* Top Header */}
           <div className="sticky top-0 z-30 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 lg:px-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -54,6 +54,7 @@ export default function ProLayout({ title, topRight, children }) {
               ) : null}
             </div>
           </div>
+
 
           {/* Content */}
           <main className="flex-1 p-4 sm:p-6">

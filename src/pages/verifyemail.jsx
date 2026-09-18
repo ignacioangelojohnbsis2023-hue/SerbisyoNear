@@ -37,7 +37,7 @@ export default function VerifyEmail() {
         } else {
           setErrorMessage(data.message || "Verification failed.");
           setSuccessMessage("");
-        }
+        }   
       } catch (error) {
         console.error(error);
         setErrorMessage(`Verification request failed: ${error.message}`);

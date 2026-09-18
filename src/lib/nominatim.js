@@ -17,4 +17,4 @@ export async function geocodeNominatim(address) {
     console.error("Nominatim geocode error:", err);
     return null;
   }
-}
+} 

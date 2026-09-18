@@ -27,7 +27,8 @@ export async function reverseGeocode(lat, lon) {
   }
 }
 
-// Geoapify - optional, requires API key
+
+
 export async function geoapifyGeocode(address, apiKey) {
   const url = `https://api.geoapify.com/v1/geocode/search?text=${encodeURIComponent(address)}&apiKey=${apiKey}`;
   try {

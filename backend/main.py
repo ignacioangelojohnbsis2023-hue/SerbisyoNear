@@ -44,13 +44,15 @@ app = FastAPI(title="SerbisyoNear API")
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://192.168.0.100:5173",
     "http://192.168.100.9:5173",
+    "http://192.168.63.186:5173",
     "http://192.168.1.31:5173",
     "http://10.11.193.248:5173",
     "http://10.11.193.248:5173",
     "http://10.243.97.236:5173",
     "http://192.168.100.238:5173",
+    "http://172.16.37.239:5173",
+    
     
 ]
 
@@ -125,6 +127,25 @@ def create_notification(db, user_id: int, title: str, message: str, notif_type: 
         related_booking_id=booking_id,
     )
     db.add(notif)
+
+
+def get_user_display_address(user):
+    if user is None:
+        return None
+
+    if user.address and str(user.address).strip():
+        return user.address.strip()
+
+    parts = [
+        getattr(user, "street", None),
+        getattr(user, "barangay", None),
+        getattr(user, "city", None),
+        getattr(user, "province", None),
+        getattr(user, "region", None),
+    ]
+    address = ", ".join(str(part).strip() for part in parts if part and str(part).strip())
+    return address or None
+
 
 def get_paymongo_auth():
     secret_key = os.getenv("PAYMONGO_SECRET_KEY", "")
@@ -1558,6 +1579,7 @@ def get_provider_jobs(provider_id: int):
         results = []
         for booking in bookings:
             resident = db.query(User).filter(User.id == booking.resident_id).first()
+            resident_address = get_user_display_address(resident) if resident else None
             results.append({
                 "id": booking.id,
                 "service_name": booking.service_name,
@@ -1567,6 +1589,10 @@ def get_provider_jobs(provider_id: int):
                 "notes": booking.notes,
                 "amount": booking.amount,
                 "resident_name": resident.full_name if resident else "Unknown",
+                "resident_phone": resident.phone if resident else None,
+                "resident_address": resident_address,
+                "resident_lat": resident.lat if resident else None,
+                "resident_lon": resident.lon if resident else None,
             })
 
         return {"status": "success", "jobs": results}
@@ -1589,6 +1615,7 @@ def get_provider_requests(provider_id: int):
         results = []
         for booking in bookings:
             resident = db.query(User).filter(User.id == booking.resident_id).first()
+            resident_address = get_user_display_address(resident) if resident else None
             results.append({
                 "id": booking.id,
                 "service_name": booking.service_name,
@@ -1598,6 +1625,9 @@ def get_provider_requests(provider_id: int):
                 "amount": booking.amount,
                 "resident_name": resident.full_name if resident else "Unknown",
                 "resident_phone": resident.phone if resident else None,
+                "resident_address": resident_address,
+                "resident_lat": resident.lat if resident else None,
+                "resident_lon": resident.lon if resident else None,
             })
 
         return {"status": "success", "requests": results}
