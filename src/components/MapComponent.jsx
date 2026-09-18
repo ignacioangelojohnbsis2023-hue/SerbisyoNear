@@ -1,6 +1,6 @@
 // MapComponent.jsx
 import React from "react";
-import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 
@@ -16,6 +16,14 @@ L.Icon.Default.mergeOptions({
 });
 
 export default function MapComponent({ lat, lon, markers = [], onMapClick }) {
+  function MapViewport() {
+    const map = useMap();
+    React.useEffect(() => {
+      map.setView([lat, lon], markers.length ? 14 : 13);
+    }, [map, lat, lon, markers.length]);
+    return null;
+  }
+
   function ClickHandler() {
     useMapEvents({
       click(e) {
@@ -28,13 +36,14 @@ export default function MapComponent({ lat, lon, markers = [], onMapClick }) {
   return (
     <MapContainer
       center={[lat, lon]}
-      zoom={13}
+      zoom={markers.length ? 14 : 13}
       style={{ height: "300px", width: "100%", borderRadius: "0.5rem" }}
     >
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution='&copy; OpenStreetMap contributors'
       />
+      <MapViewport />
       {markers.map((m) => (
         <Marker key={m.id} position={[m.lat, m.lon]} />
       ))}

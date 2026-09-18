@@ -17,7 +17,6 @@ function CredentialTags({ provider }) {
     ["government_id", "ID"],
     ["experience_declaration", "Experience"],
     ["portfolio", "Portfolio"],
-    ["skill_assessment", "Skill Assessment"],
     ["tesda_license", "TESDA"],
   ];
   return <div className="mt-2 flex flex-wrap gap-1.5">{tags.map(([key, label]) => <span key={key} className={`rounded-full px-2 py-1 text-[10px] font-semibold ${types.includes(key) ? "bg-teal-50 text-teal-700" : "bg-slate-100 text-slate-400"}`}>{label} {types.includes(key) ? "✓" : "—"}</span>)}{provider.enhanced_verification_status === "pending" && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">Enhanced Verification Pending</span>}</div>;
@@ -52,7 +51,7 @@ function Pagination({ total, page, perPage, onPage }) {
           )
         )}
         <button onClick={() => onPage(page + 1)} disabled={page === Math.ceil(total / perPage)}
-          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next →</button>
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next</button>
       </div>
     </div>
   );
@@ -77,6 +76,8 @@ export default function AdminProviders() {
   const [docs, setDocs] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [lightbox, setLightbox] = useState(null);
+  const [archiveModal, setArchiveModal] = useState(null);
+  const [archiveReason, setArchiveReason] = useState("");
 
   // Load all providers once
   useEffect(() => {
@@ -124,6 +125,30 @@ export default function AdminProviders() {
       if (data.status === "success") setDocs(data.documents);
     } catch { /* ignore */ }
     setDocsLoading(false);
+  }
+
+  async function archiveProvider(providerId, isArchived, reason = "") {
+    try {
+      const res = await fetch(`${API_BASE_URL}/admin/users/${providerId}/archive`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason || null }),
+      });
+      const data = await res.json();
+      if (data.status !== "success") {
+        alert(data.message || "Failed to update account status.");
+        return;
+      }
+      setProviders((prev) => prev.map((provider) => provider.id === providerId
+        ? { ...provider, is_archived: !isArchived, archive_reason: isArchived ? null : reason }
+        : provider));
+      setArchiveModal(null);
+      if (!isArchived && data.active_bookings?.length) {
+        alert(`This provider has ${data.active_bookings.length} active booking(s). Archiving prevents login while those bookings remain active.`);
+      }
+    } catch {
+      alert("Something went wrong.");
+    }
   }
 
   const paged = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
@@ -220,22 +245,22 @@ export default function AdminProviders() {
                 <tbody>
                   {paged.map((provider) => (
                     <tr key={provider.id} className="border-b border-slate-50">
-                      <td className="py-4 font-medium text-slate-900">{provider.full_name}</td>
-                      <td className="py-4 text-slate-600">{provider.email}</td>
-                      <td className="py-4 text-slate-600">{provider.phone || "—"}</td>
-                      <td className="py-4 text-slate-600 max-w-[200px] truncate">{provider.address || "—"}</td>
-                      <td className="py-4">
+                      <td className="py-4 align-top font-medium text-slate-900 max-w-[220px] truncate" title={provider.full_name}>{provider.full_name}</td>
+                      <td className="py-4 align-top text-slate-600">{provider.email}</td>
+                      <td className="py-4 align-top text-slate-600">{provider.phone || "—"}</td>
+                      <td className="py-4 align-top text-slate-600 max-w-[200px] truncate" title={provider.address || "—"}>{provider.address || "—"}</td>
+                      <td className="py-4 align-top">
                         <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
                           {provider.role}
                         </span>
                       </td>
-                      <td className="py-4">
+                      <td className="py-4 align-top">
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadge(provider.verification_status)}`}>
                           {provider.verification_status || "unknown"}
                         </span>
                         <CredentialTags provider={provider} />
                       </td>
-                      <td className="py-4">
+                      <td className="py-4 align-top">
                         <div className="flex flex-wrap gap-2">
                           <button onClick={() => openCredentials(provider)}
                             className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100">
@@ -251,6 +276,17 @@ export default function AdminProviders() {
                             <button onClick={() => updateStatus(provider.id, "reject")}
                               className="rounded-xl border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100">
                               ✕ Reject
+                            </button>
+                          )}
+                          {provider.is_archived ? (
+                            <button onClick={() => { if (window.confirm("Restore this provider's account?")) archiveProvider(provider.id, true); }}
+                              className="rounded-xl border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
+                              Restore
+                            </button>
+                          ) : (
+                            <button onClick={() => { setArchiveReason(""); setArchiveModal({ id: provider.id, name: provider.full_name }); }}
+                              className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700">
+                              Remove
                             </button>
                           )}
                         </div>
@@ -341,6 +377,23 @@ export default function AdminProviders() {
                   Close
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {archiveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-bold text-slate-900">Remove provider</h2>
+            <p className="mt-2 text-sm text-slate-500">{archiveModal.name}</p>
+            <label className="mt-4 block text-sm font-semibold text-slate-700">Reason for removing this provider (optional)</label>
+            <textarea value={archiveReason} onChange={(event) => setArchiveReason(event.target.value)} rows={4} maxLength={500}
+              className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-teal-500" />
+            <div className="mt-5 flex gap-3">
+              <button type="button" onClick={() => setArchiveModal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600">Cancel</button>
+              <button type="button" onClick={() => archiveProvider(archiveModal.id, false, archiveReason.trim())}
+                className="flex-1 rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">Confirm Remove</button>
             </div>
           </div>
         </div>

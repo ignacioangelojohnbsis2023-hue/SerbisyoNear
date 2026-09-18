@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { API_BASE_URL, API_BASE_URL_CANDIDATES } from "../lib/api";
+import Skeleton from "./ui/Skeleton";
 
 const CHAT_API_CANDIDATES = API_BASE_URL_CANDIDATES;
 
@@ -257,7 +258,7 @@ export default function ChatModal({ bookingId, currentUser, participantName, par
 
         <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
           {loading ? (
-            <p className="text-sm text-slate-500">Loading messages...</p>
+            <div className="space-y-3"><Skeleton className="h-16 w-3/4" /><Skeleton className="ml-auto h-12 w-2/3" /><Skeleton className="h-20 w-4/5" /></div>
           ) : messages.length === 0 ? (
             <div className="flex h-full items-center justify-center text-center text-sm text-slate-400">
               No messages yet. Start the conversation.

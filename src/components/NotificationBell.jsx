@@ -172,7 +172,7 @@ export default function NotificationBell({ userId, light = false }) {
     <div
       ref={panelRef}
       className="fixed z-[9999] w-[calc(100vw-16px)] max-w-sm rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden sm:w-80"
-      style={{ top: panelPos.top, left: panelPos.left, maxHeight: "480px" }}
+      style={{ top: panelPos.top, left: panelPos.left, maxHeight: "calc(100vh - 96px)" }}
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -195,7 +195,7 @@ export default function NotificationBell({ userId, light = false }) {
       </div>
 
       {/* List */}
-      <div className="overflow-y-auto" style={{ maxHeight: "400px" }}>
+      <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 170px)" }}>
         {notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <div className="mb-2 text-3xl">🔔</div>
@@ -215,7 +215,7 @@ export default function NotificationBell({ userId, light = false }) {
                   navigate(target);
                 }}
                 className={[
-                  "w-full text-left px-4 py-3 border-b border-slate-50 transition hover:bg-slate-50",
+                  "w-full min-w-0 text-left px-4 py-3 border-b border-slate-50 transition hover:bg-slate-50",
                   !n.is_read ? "bg-slate-50/80" : "bg-white",
                 ].join(" ")}
               >
@@ -225,14 +225,14 @@ export default function NotificationBell({ userId, light = false }) {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-1">
-                      <span className={`text-xs font-bold ${n.is_read ? "text-slate-600" : "text-slate-900"}`}>
+                      <span className={`break-words text-xs font-bold ${n.is_read ? "text-slate-600" : "text-slate-900"}`}>
                         {n.title}
                       </span>
                       {!n.is_read && (
                         <span className={`mt-1.5 h-2 w-2 flex-shrink-0 rounded-full ${cfg.dot}`} />
                       )}
                     </div>
-                    <p className="mt-0.5 text-xs leading-relaxed text-slate-500 line-clamp-2">
+                    <p className="mt-0.5 break-words text-xs leading-relaxed text-slate-500 line-clamp-3">
                       {n.message}
                     </p>
                     <span className="mt-1 text-[10px] text-slate-400">

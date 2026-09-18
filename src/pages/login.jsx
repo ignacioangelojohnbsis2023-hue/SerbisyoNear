@@ -35,6 +35,7 @@ export default function Login() {
 
       if (res.ok && data.status === "success") {
         localStorage.setItem("user", JSON.stringify(data.user));
+        window.dispatchEvent(new CustomEvent("serbisyonear-user-updated", { detail: data.user }));
 
         if (data.user.role === "resident") {
           navigate("/resident");
@@ -50,7 +51,9 @@ export default function Login() {
       }
     } catch (error) {
       console.error(error);
-      setErrorMessage("Something went wrong.");
+      setErrorMessage(
+        `Unable to reach the server at ${API_BASE_URL}. Make sure your phone and computer are on the same Wi-Fi network, then try again.`
+      );
     } finally {
       setLoading(false);
     }

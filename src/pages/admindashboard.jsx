@@ -299,7 +299,10 @@ export default function AdminDashboard() {
                 <h2 className="text-lg font-bold text-slate-900">Service Detail</h2>
                 <p className="mt-0.5 text-sm text-slate-500">Full ranking of booked services.</p>
               </div>
-              <a href="/admin" className="text-sm font-semibold text-teal-700 hover:underline">View reports</a>
+              <div className="flex items-center gap-3">
+                <a href="/admin/disputes" className="text-sm font-semibold text-orange-700 hover:underline">Disputes</a>
+                <a href="/admin" className="text-sm font-semibold text-teal-700 hover:underline">View reports</a>
+              </div>
             </div>
             {reportsLoading ? (
               <div className="space-y-3">

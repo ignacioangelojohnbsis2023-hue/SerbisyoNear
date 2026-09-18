@@ -30,7 +30,7 @@ function Pagination({ total, page, perPage, onPage }) {
           </button>
         ))}
         <button onClick={() => onPage(page+1)} disabled={page===Math.ceil(total/perPage)}
-          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next →</button>
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next</button>
       </div>
     </div>
   );
@@ -43,6 +43,8 @@ export default function AdminUsers() {
   const [roleFilter, setRoleFilter] = useState("all");
   const [showArchived, setShowArchived] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
+  const [archiveModal, setArchiveModal] = useState(null);
+  const [archiveReason, setArchiveReason] = useState("");
   const [page, setPage] = useState(1);
 
   // Load all users once on mount
@@ -77,13 +79,31 @@ export default function AdminUsers() {
   useEffect(() => { setPage(1); }, [search, roleFilter, showArchived]);
 
   async function handleArchive(userId, isArchived) {
-    if (!window.confirm(isArchived ? "Unarchive this user?" : "Archive this user?")) return;
+    if (isArchived) {
+      if (!window.confirm("Restore this user's account?")) return;
+      return submitArchive(userId, true, "");
+    }
+    setArchiveReason("");
+    setArchiveModal({ userId });
+  }
+
+  async function submitArchive(userId, isArchived, reason) {
     try {
       setActionLoading(userId);
-      const res = await fetch(`${API_BASE_URL}/admin/users/${userId}/archive`, { method: "PUT" });
+      const res = await fetch(`${API_BASE_URL}/admin/users/${userId}/archive`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason || null }),
+      });
       const data = await res.json();
-      if (data.status === "success")
-        setUsers(prev => prev.map(u => u.id === userId ? { ...u, is_archived: !isArchived } : u));
+      if (data.status === "success") {
+        setUsers(prev => prev.map(u => u.id === userId ? { ...u, is_archived: !isArchived, archive_reason: isArchived ? null : reason } : u));
+        setArchiveModal(null);
+        if (!isArchived && data.active_bookings?.length) {
+          const details = data.active_bookings.map((booking) => `${booking.service_name} (#${booking.id})`).join(", ");
+          alert(`This user has ${data.active_bookings.length} active booking(s): ${details}. Archiving prevents login while those bookings remain active.`);
+        }
+      }
       else alert(data.message || "Failed.");
     } catch { alert("Something went wrong."); }
     finally { setActionLoading(null); }
@@ -202,9 +222,9 @@ export default function AdminUsers() {
                 <tbody>
                   {paged.map(user => (
                     <tr key={user.id} className={`border-b border-slate-50 ${user.is_archived?"opacity-60":""}`}>
-                      <td className="py-4 font-medium text-slate-900">{user.full_name}</td>
-                      <td className="py-4 text-slate-600">{user.email}</td>
-                      <td className="py-4">
+                      <td className="py-4 align-top font-medium text-slate-900 max-w-[220px] truncate" title={user.full_name}>{user.full_name}</td>
+                      <td className="py-4 align-top text-slate-600">{user.email}</td>
+                      <td className="py-4 align-top">
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
                           user.role==="admin"?"bg-purple-100 text-purple-700"
                           :user.role==="pro"?"bg-amber-100 text-amber-700"
@@ -212,10 +232,10 @@ export default function AdminUsers() {
                           {user.role}
                         </span>
                       </td>
-                      <td className="py-4 text-slate-600">{user.phone||"-"}</td>
-                      <td className="py-4 text-slate-600 max-w-[160px] truncate">{user.address||"-"}</td>
-                      <td className="py-4 text-xs text-slate-400">{formatDate(user.created_at)}</td>
-                      <td className="py-4">
+                      <td className="py-4 align-top text-slate-600">{user.phone||"-"}</td>
+                      <td className="py-4 align-top text-slate-600 max-w-[200px] truncate" title={user.address || "-"}>{user.address||"-"}</td>
+                      <td className="py-4 align-top text-xs text-slate-400">{formatDate(user.created_at)}</td>
+                      <td className="py-4 align-top">
                         {user.role !== "admin" && (
                           <button onClick={() => handleArchive(user.id, user.is_archived)}
                             disabled={actionLoading === user.id}
@@ -234,6 +254,23 @@ export default function AdminUsers() {
           </>
         )}
       </div>
+      {archiveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-bold text-slate-900">Remove account</h2>
+            <p className="mt-2 text-sm text-slate-500">Reason for removing this account (optional)</p>
+            <textarea value={archiveReason} onChange={(event) => setArchiveReason(event.target.value)} rows={4} maxLength={500}
+              className="mt-3 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-teal-500" />
+            <div className="mt-5 flex gap-3">
+              <button type="button" onClick={() => setArchiveModal(null)} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600">Cancel</button>
+              <button type="button" onClick={() => submitArchive(archiveModal.userId, false, archiveReason.trim())} disabled={actionLoading === archiveModal.userId}
+                className="flex-1 rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60">
+                {actionLoading === archiveModal.userId ? "Removing..." : "Confirm Remove"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }

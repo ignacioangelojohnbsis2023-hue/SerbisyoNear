@@ -31,7 +31,7 @@ function Pagination({ total, page, perPage, onPage }) {
           </button>
         ))}
         <button onClick={() => onPage(page+1)} disabled={page===Math.ceil(total/perPage)}
-          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next →</button>
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next</button>
       </div>
     </div>
   );

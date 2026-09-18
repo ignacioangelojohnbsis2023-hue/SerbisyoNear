@@ -3,6 +3,7 @@ import ResidentLayout from "../components/ResidentLayout";
 import MapComponent from "../components/MapComponent";
 import { API_BASE_URL } from "../lib/api";
 import { geocodeNominatim } from "../lib/nominatim";
+import Skeleton, { ListSkeleton } from "../components/ui/Skeleton";
 
 function StarRating({ rating, max = 5 }) {
   return (
@@ -63,7 +64,8 @@ export default function ResidentFind() {
   const [serviceFilter, setServiceFilter] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const [mapCenter] = useState({ lat: 14.5995, lon: 120.9842 });
+  const [bookingWarning, setBookingWarning] = useState("");
+  const [mapCenter, setMapCenter] = useState({ lat: 14.5995, lon: 120.9842 });
 
   const [reviewsProvider, setReviewsProvider] = useState(null);
   const [reviews, setReviews] = useState([]);
@@ -73,6 +75,26 @@ export default function ResidentFind() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setSearch(params.get("search") || "");
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const user = JSON.parse(localStorage.getItem("user") || "null");
+      if (!user?.id) return undefined;
+      fetch(`${API_BASE_URL}/profile/${user.id}`)
+        .then((response) => response.json())
+        .then((data) => {
+          const profile = data.user;
+          if (!cancelled && data.status === "success" && profile?.lat != null && profile?.lon != null) {
+            setMapCenter({ lat: Number(profile.lat), lon: Number(profile.lon) });
+          }
+        })
+        .catch(() => {});
+    } catch {
+      return undefined;
+    }
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -125,6 +147,13 @@ export default function ResidentFind() {
       }
     }
     fetchProviders();
+    const interval = setInterval(fetchProviders, 6000);
+    const refresh = () => fetchProviders();
+    window.addEventListener("serbisyonear-booking-updated", refresh);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("serbisyonear-booking-updated", refresh);
+    };
   }, []);
 
   useEffect(() => {
@@ -201,7 +230,7 @@ export default function ResidentFind() {
   function handleSearchKeyDown(e) { if (e.key === "Enter") handleSearch(); }
 
   function closeBookingModal() {
-    setBookingProvider(null); setServiceName(""); setBookingDate(""); setBookingTime("09:00"); setNotes("");
+    setBookingProvider(null); setServiceName(""); setBookingDate(""); setBookingTime("09:00"); setNotes(""); setBookingWarning("");
   }
 
   async function handleBookSubmit(e) {
@@ -235,7 +264,7 @@ export default function ResidentFind() {
         closeBookingModal();
         setSuccessMessage("Booking created successfully.");
       } else {
-        setErrorMessage(data.message || "Failed to create booking.");
+        setBookingWarning(data.message || "Failed to create booking.");
       }
     } catch (error) {
       console.error(error);
@@ -258,7 +287,7 @@ export default function ResidentFind() {
         <div className="prototype-card p-5 sm:p-6">
           <h2 className="mb-4 text-lg font-bold text-slate-900">Provider Locations</h2>
           {loading ? (
-            <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-slate-400">Loading map...</div>
+            <Skeleton className="h-64 w-full rounded-2xl" />
           ) : (
             <MapComponent lat={mapCenter.lat} lon={mapCenter.lon} markers={mapMarkers} />
           )}
@@ -317,9 +346,7 @@ export default function ResidentFind() {
 
         {/* PROVIDER CARDS */}
         {loading ? (
-          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-            <p className="text-slate-500">Loading providers...</p>
-          </div>
+          <ListSkeleton rows={3} />
         ) : filteredProviders.length === 0 ? (
           <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
             <p className="text-slate-500">
@@ -566,7 +593,8 @@ export default function ResidentFind() {
                 <div className="flex gap-3 pt-2">
                   <button type="button" onClick={closeBookingModal}
                     className="flex-1 rounded-xl border border-slate-200 px-4 py-3 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-                  <button type="submit" disabled={submitting}
+                  {bookingWarning && <p className="col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{bookingWarning}</p>}
+                  <button type="submit" disabled={submitting || bookingWarning.toLowerCase().includes("unavailable")}
                     className="flex-1 rounded-xl bg-teal-700 px-4 py-3 font-semibold text-white hover:bg-teal-800 disabled:opacity-60">
                     {submitting ? "Booking..." : "Confirm Booking"}
                   </button>

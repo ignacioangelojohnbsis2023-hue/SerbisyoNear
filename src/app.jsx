@@ -22,6 +22,8 @@ import VerifyEmail from "./pages/verifyemail";
 import ResetPassword from "./pages/resetpassword";
 import PaymentReturn from "./pages/paymentreturn";
 import SettingsPage from "./pages/settings";
+import Disputes from "./pages/disputes";
+import AdminDisputes from "./pages/admindisputes";
 
 function getStoredUser() {
   const raw = localStorage.getItem("user");
@@ -145,6 +147,7 @@ export default function App() {
           }
         />
         <Route path="/resident/settings" element={<ProtectedRoute allowedRole="resident"><SettingsPage role="resident" /></ProtectedRoute>} />
+        <Route path="/resident/disputes" element={<ProtectedRoute allowedRole="resident"><Disputes role="resident" /></ProtectedRoute>} />
 
         <Route
           path="/pro"
@@ -191,7 +194,9 @@ export default function App() {
           }
         />
         <Route path="/pro/settings" element={<ProtectedRoute allowedRole="pro"><SettingsPage role="pro" /></ProtectedRoute>} />
+        <Route path="/pro/disputes" element={<ProtectedRoute allowedRole="pro"><Disputes role="pro" /></ProtectedRoute>} />
         <Route path="/admin/settings" element={<ProtectedRoute allowedRole="admin"><SettingsPage role="admin" /></ProtectedRoute>} />
+        <Route path="/admin/disputes" element={<ProtectedRoute allowedRole="admin"><AdminDisputes /></ProtectedRoute>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

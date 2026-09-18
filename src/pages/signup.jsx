@@ -100,10 +100,9 @@ const CREDENTIAL_TYPES = [
     required: false,
     hint: "Upload photos or videos of completed jobs.",
   },
-  { key: "skill_assessment", label: "Practical Skill Assessment", required: false, hint: "Request an in-app or in-person evaluation." },
   { key: "tesda_license", label: "TESDA / Professional License", required: false, hint: "Optional enhanced verification." },
 ];
-const EXPERIENCE_CREDENTIAL_KEYS = ["experience_declaration", "portfolio", "skill_assessment"];
+const EXPERIENCE_CREDENTIAL_KEYS = ["experience_declaration", "portfolio"];
 
 const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp", "application/pdf", "video/mp4", "video/webm"];
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -374,7 +373,6 @@ export default function SignUp() {
           credential_types: selectedCredentials,
           experience_years: experienceYears ? Number(experienceYears) : null,
           experience_description: experienceDescription.trim() || null,
-          skill_assessment_requested: selectedCredentials.includes("skill_assessment"),
           address: fullAddress,
           region: regionName,
           province: provinceName,
@@ -475,7 +473,7 @@ export default function SignUp() {
 
           <button type="button" onClick={goNext}
             className="w-full rounded-full bg-teal-700 py-3 font-semibold text-white shadow-md transition hover:bg-teal-800">
-            Continue →
+            Continue
           </button>
 
           <p className="text-center text-sm text-slate-500">
@@ -575,7 +573,7 @@ export default function SignUp() {
             </button>
             <button type="submit" disabled={loading}
               className="flex-1 rounded-full bg-teal-700 py-3 font-semibold text-white shadow-md transition hover:bg-teal-800 disabled:opacity-60">
-              {isProvider ? "Continue →" : loading ? "Creating Account..." : "Create Account"}
+              {isProvider ? "Continue" : loading ? "Creating Account..." : "Create Account"}
             </button>
           </div>
 
@@ -611,8 +609,6 @@ export default function SignUp() {
                   <input className={inputCls} type="number" min="0" placeholder="Years of experience" value={experienceYears} onChange={(e) => setExperienceYears(e.target.value)} />
                   <input className={`${inputCls} sm:col-span-2`} placeholder="Describe your past work" value={experienceDescription} onChange={(e) => setExperienceDescription(e.target.value)} />
                 </div>
-              ) : key === "skill_assessment" && selectedCredentials.includes(key) ? (
-                <div className="mt-2 rounded-xl bg-teal-50 p-3 text-xs text-teal-800">We will contact you to schedule a practical evaluation.</div>
               ) : selectedCredentials.includes(key) && (
               <div className="mt-2">
                 {previews[key] ? (

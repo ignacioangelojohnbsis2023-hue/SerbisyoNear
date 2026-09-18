@@ -328,6 +328,9 @@ export default function ResidentDashboard() {
                   <p className="font-semibold text-slate-900 text-sm truncate">{r.pro}</p>
                   <p className="text-xs text-slate-500 mt-0.5 truncate">{r.service}</p>
                   <p className="text-xs text-slate-400 truncate">{r.area}</p>
+                  {r.distance_km != null && (
+                    <p className="mt-1 text-xs font-semibold text-teal-700">{r.distance_km} km away</p>
+                  )}
                   <a href="/resident/find"
                     className="mt-3 block w-full rounded-lg bg-teal-700 py-2 text-center text-xs font-semibold text-white hover:bg-teal-800 transition">
                     Book Now

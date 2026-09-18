@@ -7,8 +7,13 @@ import bcrypt
 from sqlalchemy import text, inspect
 from sqlalchemy.orm import Session
 from database import engine, Base, SessionLocal
-from datetime import datetime, timedelta
-from models import User, Booking, ProviderService, ServiceCategory, Feedback, ProviderDocument, Notification, ChatMessage, CompletionProof, ProviderWalletTransaction
+from datetime import datetime, timedelta, date, time
+from models import (
+    User, Booking, ProviderService, ServiceCategory, Feedback, ProviderDocument,
+    Notification, ChatMessage, CompletionProof, ProviderWalletTransaction,
+    ProviderAvailability, ProviderBlockedDate, ProviderAvailabilitySettings,
+    Dispute, DisputeComment,
+)
 import requests as http_requests 
 import base64
 
@@ -66,9 +71,18 @@ app = FastAPI(title="SerbisyoNear API")
 BOOKING_TYPING_STATUS = {}
 
 LOCAL_NETWORK_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$"
+configured_frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+
+def get_frontend_url(request: Request) -> str:
+    """Use the browser's current LAN origin for links, with an env fallback."""
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    if re.match(LOCAL_NETWORK_ORIGIN_REGEX, origin):
+        return origin
+    return configured_frontend_url
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=[configured_frontend_url],
     allow_origin_regex=LOCAL_NETWORK_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
@@ -79,6 +93,8 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 CHAT_ATTACHMENT_DIR = "uploads/chat_attachments"
 os.makedirs(CHAT_ATTACHMENT_DIR, exist_ok=True)
+DISPUTE_EVIDENCE_DIR = "uploads/dispute_evidence"
+os.makedirs(DISPUTE_EVIDENCE_DIR, exist_ok=True)
 
 
 class SupportChatRequest(BaseModel):
@@ -162,13 +178,14 @@ Base.metadata.create_all(bind=engine)
 
 user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
 for user_column, user_type in (
+    ("is_available", "BOOLEAN NOT NULL DEFAULT TRUE"),
+    ("archive_reason", "VARCHAR(500) NULL"),
     ("phone_verified", "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("phone_otp_hash", "VARCHAR(128) NULL"),
     ("phone_otp_expires", "DATETIME NULL"),
     ("credential_types", "TEXT NULL"),
     ("experience_years", "INTEGER NULL"),
     ("experience_description", "TEXT NULL"),
-    ("skill_assessment_requested", "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("enhanced_verification_status", "VARCHAR(30) NULL"),
 ):
     if user_column not in user_columns:
@@ -311,7 +328,63 @@ def reconcile_booking_payment(db, booking: Booking) -> str:
         booking.payment_status = "unpaid"
     return booking.payment_status
 
+def parse_booking_datetime(value: str):
+    for format_value in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, format_value)
+        except ValueError:
+            continue
+    return None
+
+def availability_is_configured(db, provider_id: int) -> bool:
+    return db.query(ProviderAvailability).filter(ProviderAvailability.provider_id == provider_id).count() > 0
+
+def booking_fits_provider_availability(db, provider_id: int, booking_datetime: datetime) -> tuple[bool, str]:
+    if not availability_is_configured(db, provider_id):
+        return True, ""
+    if db.query(ProviderBlockedDate).filter(
+        ProviderBlockedDate.provider_id == provider_id,
+        ProviderBlockedDate.blocked_date == booking_datetime.date(),
+    ).first():
+        return False, "The provider is unavailable on that date."
+    window = db.query(ProviderAvailability).filter(
+        ProviderAvailability.provider_id == provider_id,
+        ProviderAvailability.weekday == booking_datetime.weekday(),
+        ProviderAvailability.is_available.is_(True),
+        ProviderAvailability.start_time <= booking_datetime.strftime("%H:%M"),
+        ProviderAvailability.end_time > booking_datetime.strftime("%H:%M"),
+    ).first()
+    if not window:
+        return False, "That time is outside the provider's availability."
+    settings = db.query(ProviderAvailabilitySettings).filter(ProviderAvailabilitySettings.provider_id == provider_id).first()
+    if settings and settings.max_jobs_per_day:
+        jobs_today = db.query(Booking).filter(
+            Booking.provider_id == provider_id,
+            Booking.booking_date.like(f"{booking_datetime.date().isoformat()}%"),
+            Booking.status.in_(("pending", "confirmed", "pending_confirmation", "in_progress")),
+        ).count()
+        if jobs_today >= settings.max_jobs_per_day:
+            return False, "The provider has reached the maximum jobs for that date."
+    existing = db.query(Booking).filter(
+        Booking.provider_id == provider_id,
+        Booking.booking_date.like(f"{booking_datetime.strftime('%Y-%m-%d %H:%M')}%"),
+        Booking.status.notin_(("cancelled", "completed")),
+    ).first()
+    if existing:
+        return False, "That time slot is already booked."
+    return True, ""
+
 WALLET_FEE_RATE = 0.02
+
+def refresh_provider_availability(db, provider_id: int):
+    provider = db.query(User).filter(User.id == provider_id, User.role == "pro").first()
+    if not provider:
+        return
+    active_booking = db.query(Booking).filter(
+        Booking.provider_id == provider_id,
+        Booking.status.in_(("confirmed", "pending_confirmation", "in_progress")),
+    ).first()
+    provider.is_available = active_booking is None
 
 def wallet_balance(db, provider_id: int):
     row = (db.query(ProviderWalletTransaction)
@@ -417,6 +490,26 @@ class CreateBookingRequest(BaseModel):
     booking_date: str
     notes: str | None = None
 
+class AvailabilityWindowRequest(BaseModel):
+    weekday: int
+    start_time: str
+    end_time: str
+    is_available: bool = True
+
+class AvailabilityUpdateRequest(BaseModel):
+    windows: list[AvailabilityWindowRequest] = Field(default_factory=list)
+    blocked_dates: list[dict] = Field(default_factory=list)
+    max_jobs_per_day: int | None = None
+
+class DisputeCommentRequest(BaseModel):
+    author_id: int
+    comment: str
+
+class DisputeStatusRequest(BaseModel):
+    status: str
+    resolution_notes: str | None = None
+    refund_amount: int | None = None
+
 class SignupRequest(BaseModel):
     full_name: str
     first_name: str | None = None
@@ -436,7 +529,6 @@ class SignupRequest(BaseModel):
     credential_types: list[str] = Field(default_factory=list)
     experience_years: int | None = None
     experience_description: str | None = None
-    skill_assessment_requested: bool = False
 
 class PhoneOtpRequest(BaseModel):
     phone: str
@@ -483,6 +575,9 @@ def verify_signup_phone_otp(payload: PhoneOtpRequest):
 class LoginRequest(BaseModel):
     identifier: str
     password: str
+
+class ArchiveUserRequest(BaseModel):
+    reason: str | None = None
 
 class LocationData(BaseModel):
     user_id: int
@@ -971,6 +1066,7 @@ def cancel_resident_booking(booking_id: int, payload: CancelBookingRequest = Non
         if booking.status not in {"pending", "confirmed", "pending_confirmation"}:
             return {"status": "error", "message": "This booking can no longer be cancelled"}
         booking.status = "cancelled"
+        refresh_provider_availability(db, booking.provider_id)
         booking.cancel_reason = payload.reason if payload else None
         if booking.payment_status == "paid":
             booking.payment_status = "refunded"
@@ -1248,15 +1344,50 @@ def get_provider_feedbacks(provider_id: int):
         db.close()
 
 @app.put("/admin/users/{user_id}/archive")
-def archive_user(user_id: int):
+def archive_user(user_id: int, payload: ArchiveUserRequest | None = None):
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             return {"status": "error", "message": "User not found"}
-        user.is_archived = not user.is_archived
+        archiving = not user.is_archived
+        active_bookings = []
+        if archiving:
+            booking_filter = Booking.provider_id if user.role == "pro" else Booking.resident_id
+            active_bookings = (
+                db.query(Booking)
+                .filter(booking_filter == user_id, Booking.status.in_(["pending", "confirmed"]))
+                .all()
+            )
+            reason = (payload.reason if payload else None) or None
+            user.archive_reason = reason[:500] if reason else None
+            user.is_archived = True
+            title = "Account deactivated"
+            message = "Your SerbisyoNear account has been deactivated."
+            if user.archive_reason:
+                message += f" Reason: {user.archive_reason}"
+            message += " Please contact support if you need assistance."
+            create_notification(db, user.id, title, message, "account_archived")
+        else:
+            user.is_archived = False
+            user.archive_reason = None
+            title = "Account reactivated"
+            message = "Your SerbisyoNear account has been reactivated. You can now log in again."
+            create_notification(db, user.id, title, message, "account_restored")
         db.commit()
-        return {"status": "success", "message": "User archive status updated"}
+        try:
+            subject = "Your SerbisyoNear account has been deactivated" if archiving else "Your SerbisyoNear account has been reactivated"
+            send_email(user.email, subject, message)
+        except Exception as email_error:
+            print(f"Account status email failed for user {user.id}: {email_error}")
+        return {
+            "status": "success",
+            "message": "User archive status updated",
+            "active_bookings": [
+                {"id": booking.id, "service_name": booking.service_name, "status": booking.status}
+                for booking in active_bookings
+            ],
+        }
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
@@ -1414,7 +1545,7 @@ def get_landing_summary():
 
         approved_providers_count = (
             db.query(User)
-            .filter(User.role == "pro", User.verification_status == "approved")
+            .filter(User.role == "pro", User.verification_status == "approved", User.is_available.is_(True))
             .count()
         )
 
@@ -1499,6 +1630,7 @@ def get_pro_dashboard(provider_id: int):
 
         return {
             "status": "success",
+            "is_available": bool(db.query(User).filter(User.id == provider_id).first().is_available),
             "stats": {
                 "new_requests": len(new_requests),
                 "upcoming_jobs": len(upcoming_jobs),
@@ -1755,6 +1887,7 @@ def get_profile(user_id: int):
                 "lat": user.lat,
                 "lon": user.lon,
                 "profile_picture": user.profile_picture or None,
+                "is_available": user.is_available,
             },
         }
     except Exception as e:
@@ -1854,13 +1987,32 @@ def get_resident_dashboard(resident_id: int):
                 "status": booking.status.capitalize(),
             })
 
-        recommended_pros_query = (
-            db.query(User)
-            .filter(User.role == "pro", User.verification_status == "approved")
-            .order_by(User.id.desc())
-            .limit(5)
-            .all()
-        )
+        resident = db.query(User).filter(User.id == resident_id, User.role == "resident").first()
+        resident_has_location = resident and resident.lat is not None and resident.lon is not None
+        if resident_has_location:
+            recommended_pros_query = (
+                db.query(User)
+                .filter(
+                    User.role == "pro",
+                    User.verification_status == "approved",
+                    User.is_available.is_(True),
+                    User.lat.isnot(None),
+                    User.lon.isnot(None),
+                )
+                .all()
+            )
+            recommended_pros_query.sort(
+                key=lambda provider: haversine(resident.lat, resident.lon, provider.lat, provider.lon)
+            )
+            recommended_pros_query = recommended_pros_query[:5]
+        else:
+            recommended_pros_query = (
+                db.query(User)
+                .filter(User.role == "pro", User.verification_status == "approved", User.is_available.is_(True))
+                .order_by(User.id.desc())
+                .limit(5)
+                .all()
+            )
 
         recommended_pros = []
         for provider in recommended_pros_query:
@@ -1886,6 +2038,11 @@ def get_resident_dashboard(resident_id: int):
                 "service": service_name,
                 "area": provider.address if provider.address else "No address",
                 "profile_picture": provider.profile_picture or None,
+                "distance_km": (
+                    round(haversine(resident.lat, resident.lon, provider.lat, provider.lon), 2)
+                    if resident_has_location and provider.lat is not None and provider.lon is not None
+                    else None
+                ),
             })
 
         stats = [
@@ -1917,6 +2074,7 @@ def cancel_resident_booking_simple(booking_id: int):
         if booking.status not in {"pending", "confirmed", "pending_confirmation"}:
             return {"status": "error", "message": "This booking can no longer be cancelled"}
         booking.status = "cancelled"
+        refresh_provider_availability(db, booking.provider_id)
         if booking.payment_status == "paid":
             booking.payment_status = "refunded"
             prior = db.query(ProviderWalletTransaction).filter(ProviderWalletTransaction.booking_id == booking.id, ProviderWalletTransaction.transaction_type.in_(["fee", "commission_deduction"])).first()
@@ -1952,6 +2110,7 @@ def complete_provider_job(booking_id: int):
             return {"status": "error", "message": "Insufficient wallet balance for the 2% completion fee"}
         append_wallet_transaction(db, booking.provider_id, -fee, "commission_deduction", booking_id=booking.id, reference=f"booking:{booking.id}", description="2% platform fee")
         booking.status = "completed"
+        refresh_provider_availability(db, booking.provider_id)
 
         create_notification(
             db,
@@ -2226,6 +2385,210 @@ def reject_completion_proof(booking_id: int, proof_id: int, payload: RejectCompl
         db.close()
 
 
+@app.post("/bookings/{booking_id}/disputes")
+async def create_dispute(
+    booking_id: int,
+    reporter_id: int = Form(...),
+    category: str = Form(...),
+    description: str = Form(...),
+    file: UploadFile | None = File(default=None),
+):
+    db = SessionLocal()
+    try:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        if not booking or reporter_id not in (booking.resident_id, booking.provider_id):
+            return {"status": "error", "message": "You cannot report an issue for this booking."}
+        allowed_categories = {"no_show", "poor_quality", "payment", "safety", "other"}
+        if category not in allowed_categories or not description.strip():
+            return {"status": "error", "message": "Please provide a valid category and description."}
+        evidence_url = None
+        if file:
+            if file.content_type not in ALLOWED_IMAGE_MIME:
+                return {"status": "error", "message": "Evidence must be a JPEG, PNG, or WEBP image."}
+            contents = await file.read()
+            if len(contents) > MAX_PROFILE_PIC_BYTES:
+                return {"status": "error", "message": "Evidence image must be under 3 MB."}
+            filename = f"{secrets.token_hex(16)}.{file.content_type.split('/')[-1]}"
+            with open(os.path.join(DISPUTE_EVIDENCE_DIR, filename), "wb") as evidence_file:
+                evidence_file.write(contents)
+            evidence_url = f"/uploads/dispute_evidence/{filename}"
+        dispute = Dispute(booking_id=booking_id, opened_by=reporter_id, category=category, description=description.strip(), evidence_url=evidence_url)
+        db.add(dispute)
+        db.flush()
+        db.add(DisputeComment(dispute_id=dispute.id, author_id=reporter_id, comment=description.strip()))
+        db.commit()
+        return {"status": "success", "dispute_id": dispute.id}
+    except Exception as error:
+        db.rollback()
+        return {"status": "error", "message": str(error)}
+    finally:
+        db.close()
+
+def serialize_dispute(db, dispute: Dispute, include_internal: bool = False):
+    booking = db.query(Booking).filter(Booking.id == dispute.booking_id).first()
+    resident = db.query(User).filter(User.id == booking.resident_id).first() if booking else None
+    provider = db.query(User).filter(User.id == booking.provider_id).first() if booking else None
+    comments_query = db.query(DisputeComment).filter(DisputeComment.dispute_id == dispute.id)
+    if not include_internal:
+        comments_query = comments_query.filter(DisputeComment.is_internal.is_(False))
+    comments = comments_query.order_by(DisputeComment.created_at).all()
+    return {
+        "id": dispute.id, "booking_id": dispute.booking_id, "status": dispute.status,
+        "category": dispute.category, "description": dispute.description, "evidence_url": dispute.evidence_url,
+        "resolution_notes": dispute.resolution_notes, "refund_amount": dispute.refund_amount,
+        "created_at": str(dispute.created_at) if dispute.created_at else None,
+        "booking": {"service_name": booking.service_name, "booking_date": booking.booking_date, "amount": booking.amount} if booking else None,
+        "resident": {"id": resident.id, "full_name": resident.full_name} if resident else None,
+        "provider": {"id": provider.id, "full_name": provider.full_name} if provider else None,
+        "comments": [{"id": comment.id, "author_id": comment.author_id, "comment": comment.comment, "is_internal": comment.is_internal, "created_at": str(comment.created_at) if comment.created_at else None} for comment in comments],
+    }
+
+@app.get("/disputes/user/{user_id}")
+def get_user_disputes(user_id: int):
+    db = SessionLocal()
+    try:
+        disputes = db.query(Dispute).join(Booking, Booking.id == Dispute.booking_id).filter((Booking.resident_id == user_id) | (Booking.provider_id == user_id)).order_by(Dispute.id.desc()).all()
+        return {"status": "success", "disputes": [serialize_dispute(db, dispute) for dispute in disputes]}
+    finally:
+        db.close()
+
+@app.post("/disputes/{dispute_id}/comments")
+def add_dispute_comment(dispute_id: int, payload: DisputeCommentRequest):
+    db = SessionLocal()
+    try:
+        dispute = db.query(Dispute).filter(Dispute.id == dispute_id).first()
+        booking = db.query(Booking).filter(Booking.id == dispute.booking_id).first() if dispute else None
+        if not dispute or not booking or payload.author_id not in (booking.resident_id, booking.provider_id):
+            return {"status": "error", "message": "You cannot comment on this dispute."}
+        if dispute.status in ("resolved", "dismissed"):
+            return {"status": "error", "message": "This dispute is read-only."}
+        comment = DisputeComment(dispute_id=dispute_id, author_id=payload.author_id, comment=payload.comment.strip())
+        db.add(comment)
+        db.commit()
+        return {"status": "success", "comment_id": comment.id}
+    finally:
+        db.close()
+
+@app.get("/admin/disputes")
+def get_admin_disputes(status: str = Query(default=""), category: str = Query(default="")):
+    db = SessionLocal()
+    try:
+        query = db.query(Dispute).order_by(Dispute.id.desc())
+        if status: query = query.filter(Dispute.status == status)
+        if category: query = query.filter(Dispute.category == category)
+        return {"status": "success", "disputes": [serialize_dispute(db, dispute, include_internal=True) for dispute in query.all()]}
+    finally:
+        db.close()
+
+@app.put("/admin/disputes/{dispute_id}")
+def update_admin_dispute(dispute_id: int, payload: DisputeStatusRequest):
+    db = SessionLocal()
+    try:
+        dispute = db.query(Dispute).filter(Dispute.id == dispute_id).first()
+        if not dispute or payload.status not in ("open", "under_review", "resolved", "dismissed"):
+            return {"status": "error", "message": "Invalid dispute update."}
+        dispute.status = payload.status
+        dispute.resolution_notes = payload.resolution_notes
+        if payload.refund_amount and payload.refund_amount > 0 and not dispute.refund_amount:
+            booking = db.query(Booking).filter(Booking.id == dispute.booking_id).first()
+            if booking:
+                append_wallet_transaction(db, booking.provider_id, payload.refund_amount, "refund", booking_id=booking.id, reference=f"dispute:{dispute.id}", description="Dispute resolution refund adjustment")
+                dispute.refund_amount = payload.refund_amount
+        db.commit()
+        return {"status": "success", "message": "Dispute updated."}
+    except Exception as error:
+        db.rollback()
+        return {"status": "error", "message": str(error)}
+    finally:
+        db.close()
+
+@app.get("/pro/availability/{provider_id}")
+def get_provider_availability(provider_id: int):
+    db = SessionLocal()
+    try:
+        windows = db.query(ProviderAvailability).filter(ProviderAvailability.provider_id == provider_id).order_by(ProviderAvailability.weekday, ProviderAvailability.start_time).all()
+        blocked = db.query(ProviderBlockedDate).filter(ProviderBlockedDate.provider_id == provider_id).order_by(ProviderBlockedDate.blocked_date).all()
+        settings = db.query(ProviderAvailabilitySettings).filter(ProviderAvailabilitySettings.provider_id == provider_id).first()
+        return {
+            "status": "success",
+            "configured": bool(windows),
+            "windows": [{"id": w.id, "weekday": w.weekday, "start_time": w.start_time, "end_time": w.end_time, "is_available": w.is_available} for w in windows],
+            "blocked_dates": [{"id": b.id, "date": b.blocked_date.isoformat(), "reason": b.reason} for b in blocked],
+            "max_jobs_per_day": settings.max_jobs_per_day if settings else None,
+        }
+    finally:
+        db.close()
+
+@app.put("/pro/availability/{provider_id}")
+def update_provider_availability(provider_id: int, payload: AvailabilityUpdateRequest):
+    db = SessionLocal()
+    try:
+        provider = db.query(User).filter(User.id == provider_id, User.role == "pro").first()
+        if not provider:
+            return {"status": "error", "message": "Provider not found"}
+        db.query(ProviderAvailability).filter(ProviderAvailability.provider_id == provider_id).delete()
+        for window in payload.windows:
+            if window.weekday not in range(7) or not re.fullmatch(r"\d{2}:\d{2}", window.start_time or "") or not re.fullmatch(r"\d{2}:\d{2}", window.end_time or "") or window.start_time >= window.end_time:
+                return {"status": "error", "message": "Please provide valid weekday and time ranges."}
+            db.add(ProviderAvailability(provider_id=provider_id, weekday=window.weekday, start_time=window.start_time, end_time=window.end_time, is_available=window.is_available))
+        db.query(ProviderBlockedDate).filter(ProviderBlockedDate.provider_id == provider_id).delete()
+        for blocked in payload.blocked_dates:
+            blocked_date = date.fromisoformat(str(blocked.get("date")))
+            db.add(ProviderBlockedDate(provider_id=provider_id, blocked_date=blocked_date, reason=(blocked.get("reason") or "").strip() or None))
+        settings = db.query(ProviderAvailabilitySettings).filter(ProviderAvailabilitySettings.provider_id == provider_id).first()
+        if payload.max_jobs_per_day is not None and payload.max_jobs_per_day < 1:
+            return {"status": "error", "message": "Maximum jobs per day must be at least 1."}
+        if not settings:
+            settings = ProviderAvailabilitySettings(provider_id=provider_id)
+            db.add(settings)
+        settings.max_jobs_per_day = payload.max_jobs_per_day
+        db.commit()
+        return {"status": "success", "message": "Availability updated."}
+    except ValueError:
+        db.rollback()
+        return {"status": "error", "message": "Blocked dates must use YYYY-MM-DD format."}
+    except Exception as error:
+        db.rollback()
+        return {"status": "error", "message": str(error)}
+    finally:
+        db.close()
+
+@app.get("/resident/providers/{provider_id}/availability")
+def get_booking_availability(provider_id: int, booking_date: str = Query(...)):
+    db = SessionLocal()
+    try:
+        selected_date = date.fromisoformat(booking_date)
+        windows = db.query(ProviderAvailability).filter(
+            ProviderAvailability.provider_id == provider_id,
+            ProviderAvailability.weekday == selected_date.weekday(),
+            ProviderAvailability.is_available.is_(True),
+        ).order_by(ProviderAvailability.start_time).all()
+        blocked = db.query(ProviderBlockedDate).filter(
+            ProviderBlockedDate.provider_id == provider_id,
+            ProviderBlockedDate.blocked_date == selected_date,
+        ).first()
+        if not windows or blocked:
+            return {"status": "success", "configured": availability_is_configured(db, provider_id), "slots": []}
+        slots = []
+        for window in windows:
+            cursor = datetime.combine(selected_date, time.fromisoformat(window.start_time))
+            end = datetime.combine(selected_date, time.fromisoformat(window.end_time))
+            while cursor < end:
+                candidate = cursor.strftime("%Y-%m-%d %H:%M")
+                taken = db.query(Booking).filter(
+                    Booking.provider_id == provider_id,
+                    Booking.booking_date.like(f"{candidate}%"),
+                    Booking.status.notin_(("cancelled", "completed")),
+                ).first()
+                if not taken:
+                    slots.append(cursor.strftime("%H:%M"))
+                cursor += timedelta(minutes=30)
+        return {"status": "success", "configured": True, "slots": sorted(set(slots))}
+    except ValueError:
+        return {"status": "error", "message": "Invalid booking date."}
+    finally:
+        db.close()
+
 @app.post("/resident/book")
 def create_booking(payload: CreateBookingRequest):
     db = SessionLocal()
@@ -2239,6 +2602,9 @@ def create_booking(payload: CreateBookingRequest):
             return {"status": "error", "message": "Provider not found"}
         if provider.verification_status != "approved":
             return {"status": "error", "message": "Provider is not approved"}
+        refresh_provider_availability(db, provider.id)
+        if not provider.is_available:
+            return {"status": "error", "message": "Provider is currently unavailable"}
 
         category = db.query(ServiceCategory).filter(ServiceCategory.name == payload.service_name).first()
         if not category:
@@ -2334,6 +2700,7 @@ def get_resident_providers():
                 "lat": user.lat,
                 "lon": user.lon,
                 "profile_picture": user.profile_picture or None,
+                "is_available": user.is_available,
                 "services": service_items,
             })
 
@@ -2440,14 +2807,17 @@ def accept_provider_request(booking_id: int, payload: AcceptBookingRequest = Non
         if not booking:
             return {"status": "error", "message": "Booking not found"}
 
+        provider = db.query(User).filter(User.id == booking.provider_id).first()
+        refresh_provider_availability(db, booking.provider_id)
+        if not provider or not provider.is_available:
+            return {"status": "error", "message": "This provider is currently unavailable."}
         fee = math.ceil((booking.amount or 0) * WALLET_FEE_RATE)
         if wallet_balance(db, booking.provider_id) < fee:
             return {"status": "error", "message": f"Insufficient wallet balance. Please top up at least ₱{fee:.2f} to accept this job."}
         booking.status = "confirmed"
+        provider.is_available = False
         if payload and payload.note:
             booking.acceptance_note = payload.note
-
-        provider = db.query(User).filter(User.id == booking.provider_id).first()
 
         create_notification(
             db,
@@ -2476,7 +2846,7 @@ def decline_provider_request(booking_id: int):
             return {"status": "error", "message": "Booking not found"}
 
         booking.status = "cancelled"
-        provider = db.query(User).filter(User.id == booking.provider_id).first()
+        refresh_provider_availability(db, booking.provider_id)
 
         create_notification(
             db,
@@ -2904,6 +3274,8 @@ def get_admin_providers(search: str = Query(default=""), status: str = Query(def
                     "verification_status": user.verification_status,
                     "credential_types": json.loads(user.credential_types or "[]"),
                     "enhanced_verification_status": user.enhanced_verification_status,
+                    "is_archived": user.is_archived or False,
+                    "archive_reason": user.archive_reason,
                 }
                 for user in providers
             ],
@@ -3045,6 +3417,7 @@ def get_admin_users(search: str = Query(default=""), role: str = Query(default="
                     "phone": user.phone,
                     "address": user.address,
                     "is_archived": user.is_archived or False,
+                    "archive_reason": user.archive_reason,
                     "created_at": str(user.created_at) if user.created_at else "-",
                 }
                 for user in users
@@ -3244,7 +3617,7 @@ def seed_demo_v2():
 
 
 @app.post("/signup")
-def signup(payload: SignupRequest):
+def signup(request: Request, payload: SignupRequest):
     db = SessionLocal()
     try:
         existing_user = db.query(User).filter(User.email == payload.email).first()
@@ -3268,7 +3641,7 @@ def signup(payload: SignupRequest):
 
         if payload.role == "pro":
             credentials = set(payload.credential_types)
-            if "government_id" not in credentials or not credentials.intersection({"experience_declaration", "portfolio", "skill_assessment"}):
+            if "government_id" not in credentials or not credentials.intersection({"experience_declaration", "portfolio"}):
                 return {"status": "error", "message": "Providers need a valid Government ID plus at least one experience credential."}
         verification_status = "pending" if payload.role == "pro" else "approved"
         email_verification_token = generate_token()
@@ -3282,7 +3655,6 @@ def signup(payload: SignupRequest):
             credential_types=json.dumps(payload.credential_types),
             experience_years=payload.experience_years,
             experience_description=payload.experience_description,
-            skill_assessment_requested=payload.skill_assessment_requested,
             enhanced_verification_status="pending" if "tesda_license" in payload.credential_types else None,
             address=payload.address, region=payload.region,
             province=payload.province, city=payload.city, barangay=payload.barangay,
@@ -3294,7 +3666,7 @@ def signup(payload: SignupRequest):
         db.commit()
         db.refresh(new_user)
 
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+        frontend_url = get_frontend_url(request)
         verify_link = f"{frontend_url}/verify-email?token={email_verification_token}"
 
         email_body = f"""
@@ -3357,11 +3729,20 @@ def login(payload: LoginRequest):
 
         if user.role == "pro" and user.verification_status != "approved":
             return {"status": "error", "message": "Your provider account is still pending admin approval."}
+        if user.is_archived:
+            return {"status": "error", "message": "Your account has been deactivated. Please contact support for more information."}
 
         return {
             "status": "success",
             "message": "Login successful",
-            "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "role": user.role},
+            "user": {
+                "id": user.id,
+                "full_name": user.full_name,
+                "email": user.email,
+                "role": user.role,
+                "profile_picture": user.profile_picture or None,
+                "is_available": user.is_available,
+            },
         }
 
     except Exception as e:
@@ -3370,7 +3751,7 @@ def login(payload: LoginRequest):
         db.close()
 
 @app.post("/forgot-password")
-def forgot_password(payload: ForgotPasswordRequest):
+def forgot_password(request: Request, payload: ForgotPasswordRequest):
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.email == payload.email).first()
@@ -3385,7 +3766,7 @@ def forgot_password(payload: ForgotPasswordRequest):
         user.reset_password_expires = reset_expiry
         db.commit()
 
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+        frontend_url = get_frontend_url(request)
         reset_link = f"{frontend_url}/reset-password?token={reset_token}"
 
         email_body = f"""

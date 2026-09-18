@@ -266,7 +266,7 @@ export default function ProDashboard() {
   const [statsData, setStatsData] = useState({
     new_requests: 0, upcoming_jobs: 0,
     completed_jobs: 0, monthly_earnings: 0,
-    most_frequent_job: "—", wallet_balance: 0,
+    most_frequent_job: "—", wallet_balance: 0, is_available: true,
   });
   const [recentRequests, setRecentRequests] = useState([]);
   const [earningsData, setEarningsData] = useState([]);
@@ -312,7 +312,7 @@ export default function ProDashboard() {
       const walletJson = await walletRes.json();
 
       if (dashData.status === "success") {
-        setStatsData(dashData.stats || {});
+        setStatsData({ ...(dashData.stats || {}), is_available: dashData.is_available !== false });
         setRecentRequests(dashData.recent_requests || []);
       } else {
         setErrorMessage(dashData.message || "Failed to load dashboard.");
@@ -342,7 +342,12 @@ export default function ProDashboard() {
     }
   }
 
-  useEffect(() => { fetchDashboard(); }, []);
+  useEffect(() => {
+    fetchDashboard();
+    const refresh = () => fetchDashboard();
+    window.addEventListener("serbisyonear-booking-updated", refresh);
+    return () => window.removeEventListener("serbisyonear-booking-updated", refresh);
+  }, []);
 
   async function confirmAccept(note) {
     if (!acceptModal) return;
@@ -425,6 +430,12 @@ export default function ProDashboard() {
         {errorMessage && (
           <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">{errorMessage}</div>
         )}
+        <div className={`rounded-2xl border p-4 ${statsData.is_available ? "border-emerald-100 bg-emerald-50" : "border-amber-100 bg-amber-50"}`}>
+          <p className={`text-sm font-semibold ${statsData.is_available ? "text-emerald-800" : "text-amber-800"}`}>
+            {statsData.is_available ? "Available for new bookings" : "Currently unavailable — job in progress"}
+          </p>
+          <p className="mt-1 text-xs text-slate-600">Your visibility updates automatically with your booking status.</p>
+        </div>
 
         {/* Stat Cards */}
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
@@ -555,7 +566,7 @@ export default function ProDashboard() {
               className="group rounded-2xl border border-slate-100 bg-white p-5 shadow-sm transition hover:shadow-md hover:border-teal-100">
               <div className="text-base font-bold text-slate-900 group-hover:text-teal-700 transition">{link.title}</div>
               <p className="mt-1.5 text-sm text-slate-500">{link.desc}</p>
-              <p className="mt-3 text-sm font-semibold text-teal-700">Open →</p>
+              <p className="mt-3 text-sm font-semibold text-teal-700">Open</p>
             </a>
           ))}
         </section>

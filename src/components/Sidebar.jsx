@@ -1,41 +1,14 @@
 import React, { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { CalendarDays, ClipboardList, Home, LayoutGrid, LogOut, Search, User, Users, Wallet, Wrench } from "lucide-react";
-
-const residentNav = [
-  { label: "Dashboard", to: "/resident", icon: Home },
-  { label: "Find Services", to: "/resident/find", icon: Search },
-  { label: "My Bookings", to: "/resident/bookings", icon: CalendarDays },
-  { label: "Profile", to: "/resident/profile", icon: User },
-];
-
-const proNav = [
-  { label: "Dashboard", to: "/pro", icon: Home },
-  { label: "Job Requests", to: "/pro/requests", icon: ClipboardList },
-  { label: "My Jobs", to: "/pro/jobs", icon: Wrench },
-  { label: "Wallet", to: "/pro/wallet", icon: Wallet },
-  { label: "Profile", to: "/pro/profile", icon: User },
-];
-
-const adminNav = [
-  { label: "Dashboard", to: "/admin", icon: Home },
-  { label: "Users", to: "/admin/users", icon: Users },
-  { label: "Providers", to: "/admin/providers", icon: LayoutGrid },
-  { label: "Bookings", to: "/admin/bookings", icon: CalendarDays },
-];
+import { LogOut } from "lucide-react";
+import { isNavigationActive, navigationByRole } from "./navigation";
 
 export default function Sidebar({ title = "Resident" }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
-  // Get current user id for notifications
-  const rawUser = localStorage.getItem("user");
-  const currentUser = rawUser ? JSON.parse(rawUser) : null;
-
-  let items = residentNav;
-  if (title === "Pro") items = proNav;
-  if (title === "Admin") items = adminNav;
+  const items = navigationByRole[title] || navigationByRole.Resident;
 
   function handleLogoutConfirm() {
     localStorage.removeItem("user");
@@ -60,9 +33,7 @@ export default function Sidebar({ title = "Resident" }) {
 
         <nav className="mt-6 flex-1 space-y-1 overflow-y-auto">
           {items.map((item) => {
-            const active = item.to === `/${title.toLowerCase()}`
-              ? location.pathname === item.to
-              : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
+            const active = isNavigationActive(location.pathname, item.to);
             const Icon = item.icon;
             return (
               <Link

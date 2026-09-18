@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import ProLayout from "../components/ProLayout";
 import ChatModal from "../components/ChatModal";
 import { API_BASE_URL } from "../lib/api";
+import ReportIssueModal from "../components/ReportIssueModal";
 
 const PER_PAGE = 8;
 
@@ -32,7 +33,7 @@ function Pagination({ total, page, perPage, onPage }) {
           </button>
         ))}
         <button onClick={() => onPage(page + 1)} disabled={page === Math.ceil(total / perPage)}
-          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next →</button>
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next</button>
       </div>
     </div>
   );
@@ -43,6 +44,7 @@ export default function ProJobs() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedJobId, setSelectedJobId] = useState(null);
+  const [issueJob, setIssueJob] = useState(null);
   const [chatJob, setChatJob] = useState(null);
   const [completeJobId, setCompleteJobId] = useState(null);
   const [processing, setProcessing] = useState(false);
@@ -119,6 +121,7 @@ export default function ProJobs() {
       const data = await res.json();
       if (data.status === "success") {
         setJobs((prev) => prev.map((job) => job.id === completeJobId ? { ...job, status: "completed" } : job));
+        window.dispatchEvent(new CustomEvent("serbisyonear-booking-updated", { detail: { bookingId: completeJobId, status: "completed", providerId: currentUser?.id } }));
         setSuccessMessage("Job marked as completed.");
         setCompleteJobId(null);
       } else {
@@ -507,7 +510,6 @@ export default function ProJobs() {
                           className="inline-flex items-center gap-2 rounded-xl bg-teal-700 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-teal-800"
                         >
                           View details
-                          <span aria-hidden="true" className="text-sm">→</span>
                         </button>
                       </div>
                     </div>
@@ -678,6 +680,11 @@ export default function ProJobs() {
                     View Receipt
                   </button>
                 )}
+                {["confirmed", "pending_confirmation", "completed"].includes(selectedJob.status) && (
+                  <button type="button" onClick={() => setIssueJob(selectedJob)} className="flex-1 rounded-xl border border-orange-200 px-4 py-3 font-semibold text-orange-700 hover:bg-orange-50">
+                    Report an Issue
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -707,6 +714,14 @@ export default function ProJobs() {
               </div>
             </div>
           </div>
+        )}
+        {issueJob && (
+          <ReportIssueModal
+            booking={issueJob}
+            user={currentUser}
+            onClose={() => setIssueJob(null)}
+            onSubmitted={() => setSuccessMessage("Issue reported. You can follow up from Disputes.")}
+          />
         )}
 
         {chatJob && (

@@ -6,7 +6,7 @@ import { API_BASE_URL } from "../lib/api";
 import {
   ShieldCheck, MapPin, Clock3, UserCircle2,
   ChevronLeft, ChevronRight, Search, CalendarCheck,
-  Wrench, Star, ArrowRight, CheckCircle2
+  Wrench, Star, CheckCircle2
 } from "lucide-react";
 
 function Container({ children, className = "" }) {
@@ -236,15 +236,23 @@ export default function LandingPage() {
   const [stats, setStats] = useState({ services_count: 0, approved_providers_count: 0, completed_bookings_count: 0 });
   const [testimonials, setTestimonials] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [statsError, setStatsError] = useState("");
   const [testimonialsLoading, setTestimonialsLoading] = useState(true);
 
   useEffect(() => {
     async function fetchLandingData() {
       try {
         const res = await fetch(`${API_BASE_URL}/landing/summary`);
+        if (!res.ok) throw new Error(`Landing summary request failed (${res.status})`);
         const data = await res.json();
-        if (data.status === "success") { setServices(data.services || []); setStats(data.stats || {}); }
-      } catch (e) { console.error(e); }
+        if (data.status !== "success" || !data.stats) throw new Error("Landing summary returned an invalid response");
+        setServices(data.services || []);
+        setStats(data.stats);
+        setStatsError("");
+      } catch (e) {
+        console.error(e);
+        setStatsError("Live statistics are temporarily unavailable. Please check that the backend is reachable on this network.");
+      }
       finally { setLoading(false); }
     }
     async function fetchTestimonials() {
@@ -293,7 +301,7 @@ export default function LandingPage() {
                 Connect with trusted household workers and maintenance pros in your barangay. All providers are verified, bookings are simple, and help is always nearby.
               </p>
               <div className="mt-8 flex flex-wrap gap-4">
-                <PrimaryButton onClick={() => navigate("/signup")}>Find a Service <ArrowRight size={15} /></PrimaryButton>
+                <PrimaryButton onClick={() => navigate("/signup")}>Find a Service</PrimaryButton>
                 <SecondaryButton onClick={() => navigate("/signup")}>Join as Provider</SecondaryButton>
               </div>
               <div className="mt-10 grid max-w-2xl grid-cols-1 gap-4 sm:grid-cols-3">
@@ -303,11 +311,12 @@ export default function LandingPage() {
                   { value: stats.completed_bookings_count, label: "Completed Bookings" },
                 ].map((s) => (
                   <div key={s.label} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                    <div className="text-2xl font-extrabold text-slate-900">{loading ? "..." : Number(s.value || 0).toLocaleString()}</div>
+                    <div className="text-2xl font-extrabold text-slate-900">{loading ? "..." : statsError ? "—" : Number(s.value || 0).toLocaleString()}</div>
                     <div className="mt-1 text-sm text-slate-500">{s.label}</div>
                   </div>
                 ))}
               </div>
+              {statsError && <p className="mt-3 max-w-2xl text-xs text-amber-700">{statsError}</p>}
             </div>
             <div className="flex justify-center lg:justify-end">
               <div className="group relative w-full max-w-xl overflow-hidden rounded-[2.25rem] shadow-xl">
@@ -402,7 +411,7 @@ export default function LandingPage() {
             ))}
           </div>
           <div className="mt-12 text-center">
-            <PrimaryButton onClick={() => navigate("/signup")}>Get Started — It's Free <ArrowRight size={15} /></PrimaryButton>
+            <PrimaryButton onClick={() => navigate("/signup")}>Get Started — It's Free</PrimaryButton>
           </div>
         </Container>
       </section>
@@ -419,7 +428,7 @@ export default function LandingPage() {
             {!loading && services.length > 4 && (
               <button onClick={() => navigate("/signup")}
                 className="flex items-center gap-1.5 text-sm font-semibold text-teal-700 hover:text-teal-900 transition">
-                View all {services.length} services <ArrowRight size={15} />
+                View all {services.length} services
               </button>
             )}
           </div>

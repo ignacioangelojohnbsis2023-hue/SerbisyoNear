@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, func, ForeignKey, Boolean, Float, Index
+from sqlalchemy import Column, Integer, String, Text, DateTime, Date, func, ForeignKey, Boolean, Float, Index, UniqueConstraint
 from database import Base
 
 
@@ -25,12 +25,14 @@ class User(Base):
     credential_types = Column(Text, nullable=True)
     experience_years = Column(Integer, nullable=True)
     experience_description = Column(Text, nullable=True)
-    skill_assessment_requested = Column(Boolean, default=False)
+    # Drop legacy DB column manually when convenient: ALTER TABLE users DROP COLUMN skill_assessment_requested;
     enhanced_verification_status = Column(String(30), nullable=True)
     address = Column(Text, nullable=True)
     profile_picture = Column(String(500), nullable=True)  # ← NEW: e.g. "uploads/profile_pictures/3/abc.jpg"
     verification_status = Column(String(50), nullable=True, default="approved")
     is_archived = Column(Boolean, default=False)
+    archive_reason = Column(String(500), nullable=True)
+    is_available = Column(Boolean, nullable=False, default=True)
     lat = Column(Float, nullable=True)
     lon = Column(Float, nullable=True)
 
@@ -78,6 +80,41 @@ class ProviderService(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class ProviderAvailability(Base):
+    __tablename__ = "provider_availability"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    weekday = Column(Integer, nullable=False)
+    start_time = Column(String(5), nullable=False)
+    end_time = Column(String(5), nullable=False)
+    is_available = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_provider_availability_provider_day", "provider_id", "weekday"),)
+
+
+class ProviderBlockedDate(Base):
+    __tablename__ = "provider_blocked_dates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    blocked_date = Column(Date, nullable=False)
+    reason = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("provider_id", "blocked_date", name="uq_provider_blocked_date"),)
+
+
+class ProviderAvailabilitySettings(Base):
+    __tablename__ = "provider_availability_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    max_jobs_per_day = Column(Integer, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class ServiceCategory(Base):
     __tablename__ = "service_categories"
 
@@ -121,6 +158,33 @@ class CompletionProof(Base):
     rejection_reason = Column(String(500), nullable=True)
     submitted_at = Column(DateTime(timezone=True), server_default=func.now())
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class Dispute(Base):
+    __tablename__ = "disputes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
+    opened_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    category = Column(String(50), nullable=False)
+    description = Column(Text, nullable=False)
+    evidence_url = Column(String(500), nullable=True)
+    status = Column(String(30), nullable=False, default="open")
+    resolution_notes = Column(Text, nullable=True)
+    refund_amount = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DisputeComment(Base):
+    __tablename__ = "dispute_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    dispute_id = Column(Integer, ForeignKey("disputes.id"), nullable=False, index=True)
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    comment = Column(Text, nullable=False)
+    is_internal = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class ChatMessage(Base):

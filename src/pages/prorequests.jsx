@@ -40,7 +40,7 @@ function Pagination({ total, page, perPage, onPage }) {
           </button>
         ))}
         <button onClick={() => onPage(page + 1)} disabled={page === Math.ceil(total / perPage)}
-          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next →</button>
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next</button>
       </div>
     </div>
   );
@@ -56,6 +56,7 @@ export default function ProRequests() {
   const [processing, setProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [actionWarning, setActionWarning] = useState("");
   const [page, setPage] = useState(1);
 
   useEffect(() => {
@@ -87,8 +88,8 @@ export default function ProRequests() {
     if (targetRequest) setSelectedRequest(targetRequest);
   }, [requests, searchParams]);
 
-  function openActionModal(request, action) { setSelectedRequest(null); setActionModal({ request, action }); setAcceptanceNote(""); }
-  function closeActionModal() { if (processing) return; setActionModal(null); setAcceptanceNote(""); }
+  function openActionModal(request, action) { setSelectedRequest(null); setActionModal({ request, action }); setAcceptanceNote(""); setActionWarning(""); }
+  function closeActionModal() { if (processing) return; setActionModal(null); setAcceptanceNote(""); setActionWarning(""); }
 
   async function confirmAction() {
     if (!actionModal?.request?.id || !actionModal?.action) return;
@@ -114,7 +115,12 @@ export default function ProRequests() {
         setAcceptanceNote("");
         setPage(1);
       } else {
-        setErrorMessage(data.message || `Failed to ${action} booking.`);
+        const message = data.message || `Failed to ${action} booking.`;
+        if (action === "accept" && (message.toLowerCase().includes("insufficient wallet") || message.toLowerCase().includes("unavailable"))) {
+          setActionWarning(message);
+        } else {
+          setErrorMessage(message);
+        }
       }
     } catch (error) {
       console.error(error);
@@ -202,7 +208,6 @@ export default function ProRequests() {
 
                       <div className="flex items-center gap-2 self-start sm:self-center">
                         <span className="text-xs font-semibold uppercase tracking-wide text-teal-700">Details</span>
-                        <span aria-hidden="true" className="text-lg text-slate-400">→</span>
                       </div>
                     </div>
                   </button>
@@ -400,12 +405,18 @@ export default function ProRequests() {
                 </div>
               )}
 
+              {actionWarning && (
+                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
+                  {actionWarning}
+                </div>
+              )}
+
               <div className="mt-6 flex gap-3">
                 <button type="button" onClick={closeActionModal} disabled={processing}
                   className="flex-1 rounded-xl border border-slate-200 px-4 py-3 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
                   Back
                 </button>
-                <button type="button" onClick={confirmAction} disabled={processing}
+                <button type="button" onClick={confirmAction} disabled={processing || Boolean(actionWarning)}
                   className={`flex-1 rounded-xl px-4 py-3 font-semibold text-white disabled:opacity-60 ${
                     actionModal.action === "accept" ? "bg-teal-700 hover:bg-teal-800" : "bg-red-600 hover:bg-red-700"
                   }`}>

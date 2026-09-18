@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import ResidentLayout from "../components/ResidentLayout";
 import ChatModal from "../components/ChatModal";
 import { API_BASE_URL } from "../lib/api";
+import ReportIssueModal from "../components/ReportIssueModal";
 
 const PER_PAGE = 8;
 const formatBookingId = (id) => `BK-${String(id).padStart(6, "0")}`;
@@ -33,7 +34,7 @@ function Pagination({ total, page, perPage, onPage }) {
           </button>
         ))}
         <button onClick={() => onPage(page + 1)} disabled={page === Math.ceil(total / perPage)}
-          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next →</button>
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Next</button>
       </div>
     </div>
   );
@@ -98,6 +99,7 @@ export default function ResidentBookings() {
 
   // Payment
   const [payingId, setPayingId] = useState(null);
+  const [issueBooking, setIssueBooking] = useState(null);
 
   // Completion proof review
   const [proofs, setProofs] = useState([]);
@@ -486,7 +488,6 @@ export default function ResidentBookings() {
                             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700 hover:border-teal-200 hover:text-teal-700"
                           >
                             View details
-                            <span aria-hidden="true">→</span>
                           </button>
                           <button
                             type="button"
@@ -674,6 +675,12 @@ export default function ResidentBookings() {
                       </>
                     )}
 
+                    {["confirmed", "pending_confirmation", "completed"].includes(selectedBooking.status) && (
+                      <button onClick={() => setIssueBooking(selectedBooking)} className="rounded-xl border border-orange-200 px-4 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-50">
+                        Report an Issue
+                      </button>
+                    )}
+
                     {["completed", "cancelled"].includes(selectedBooking.status) && (
                       <button onClick={() => openRebookModal(selectedBooking)} className="rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">
                         Rebook
@@ -704,6 +711,15 @@ export default function ResidentBookings() {
             />
           );
         })()}
+
+        {issueBooking && (
+          <ReportIssueModal
+            booking={issueBooking}
+            user={JSON.parse(localStorage.getItem("user") || "null")}
+            onClose={() => setIssueBooking(null)}
+            onSubmitted={() => setSuccessMessage("Issue reported. You can follow up from Disputes.")}
+          />
+        )}
 
         {/* ── Reject Proof Modal ── */}
         {rejectProofId && selectedBooking && (

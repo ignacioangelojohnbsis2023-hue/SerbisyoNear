@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ChevronDown, CircleHelp, LogOut, Settings, UserRound } from "lucide-react";
+import { ChevronDown, CircleHelp, LogOut, Settings, UserRound, ShieldAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import Avatar from "./Avatar";
+import { API_BASE_URL } from "../lib/api";
 
 const PROFILE_PATHS = {
   Resident: "/resident/profile",
@@ -19,14 +20,30 @@ export default function AccountMenu({ user, role = "Resident", onHelpSupport }) 
   const [displayUser, setDisplayUser] = useState(user);
   const [open, setOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
+  const [openDisputes, setOpenDisputes] = useState(0);
   const menuRef = useRef(null);
   const navigate = useNavigate();
   const profilePath = PROFILE_PATHS[role] || PROFILE_PATHS.Resident;
   const settingsPath = SETTINGS_PATHS[role] || SETTINGS_PATHS.Resident;
+  const disputesPath = role === "Pro" ? "/pro/disputes" : role === "Admin" ? "/admin/disputes" : "/resident/disputes";
 
   useEffect(() => {
     setDisplayUser(user);
   }, [user]);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    fetch(`${API_BASE_URL}/profile/${user.id}`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (data.status !== "success" || !data.user) return;
+        setDisplayUser(data.user);
+        localStorage.setItem("user", JSON.stringify(data.user));
+        window.dispatchEvent(new CustomEvent("serbisyonear-user-updated", { detail: data.user }));
+      })
+      .catch(() => {});
+    return undefined;
+  }, [user?.id]);
 
   useEffect(() => {
     function syncUser(event) {
@@ -45,6 +62,17 @@ export default function AccountMenu({ user, role = "Resident", onHelpSupport }) 
     if (open) document.addEventListener("mousedown", closeOnOutsideClick);
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [open]);
+
+  useEffect(() => {
+    if (!displayUser?.id || role === "Admin") return undefined;
+    fetch(`${API_BASE_URL}/disputes/user/${displayUser.id}`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (data.status === "success") setOpenDisputes((data.disputes || []).filter((item) => item.status === "open" || item.status === "under_review").length);
+      })
+      .catch(() => {});
+    return undefined;
+  }, [displayUser?.id, role]);
 
   function logout() {
     localStorage.removeItem("user");
@@ -83,6 +111,10 @@ export default function AccountMenu({ user, role = "Resident", onHelpSupport }) 
             <button type="button" onClick={() => { setOpen(false); onHelpSupport ? onHelpSupport() : navigate(`${profilePath}?section=help`); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-[#FAF6EE]">
               <CircleHelp size={17} className="text-teal-700" />
               Help &amp; Support
+            </button>
+            <button type="button" onClick={() => { setOpen(false); navigate(disputesPath); }} className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-[#FAF6EE]">
+              <span className="flex items-center gap-3"><ShieldAlert size={17} className="text-teal-700" />Disputes</span>
+              {openDisputes > 0 && <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-700">{openDisputes}</span>}
             </button>
             <button type="button" onClick={() => { setOpen(false); setLogoutOpen(true); }} className="mt-1 flex w-full items-center gap-3 rounded-xl border-t border-[#E9E2D2] px-3 py-2.5 pt-3 text-left text-sm font-semibold text-[#D9694E] hover:bg-[#F7E4DD]">
               <LogOut size={17} />
